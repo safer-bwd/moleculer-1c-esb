@@ -14,7 +14,8 @@
   "keywords": [
     "moleculer",
     "1C:ESB",
-    "1C:Шина"
+    "1С:Шина",
+    "1С Шина"
   ],
   "author": "Anton Safronov <safer.anton@gmail.com>",
   "contributors": [
@@ -32,8 +33,11 @@
     "moleculer": ">=0.14.0"
   },
   "dependencies": {
-    "amqp10": "^3.6.0",
-    "amqpuri": "^2.0.1"
+    "exponential-backoff": "^3.1.1",
+    "lodash.get": "^4.4.2",
+    "lodash.merge": "^4.6.2",
+    "lodash.pick": "^4.4.0",
+    "rhea-promise": "^3.0.1"
   },
   "devDependencies": {
     "eslint": "^8.41.0",
@@ -42,6 +46,6 @@
     "moleculer": "^0.14.29"
   },
   "engines": {
-    "node": ">= 12.0.0"
+    "node": ">= 10.0.0"
   }
 }
