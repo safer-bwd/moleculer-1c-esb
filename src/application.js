@@ -1,5 +1,5 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
-const { ReceiverEvents } = require('rhea-promise');
+const { ReceiverEvents, SenderEvents } = require('rhea-promise');
 const { merge, get, pick } = require('./utils');
 
 const ChannelDirections = {
@@ -36,8 +36,14 @@ class Application {
 
   async close() {
     this._logger.debug('closing...');
+
     await this._closeLinks();
     await this._closeConnection();
+
+    this._senders = new Map();
+    this._recievers = new Map();
+    this._connection = null;
+
     this._logger.info('closed.');
   }
 
@@ -123,6 +129,10 @@ class Application {
 
     const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), amqpOpts);
     const sender = await this._connection.createAwaitableSender(process, channel, senderOpts);
+
+    sender.on(SenderEvents.senderError, (err) => {
+      this._logger.debug(`sender for '${channelName}' error`, err);
+    });
 
     this._logger.info(`sender for '${channelName}' created.`);
 
