@@ -1,9 +1,15 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
+const { ReceiverEvents } = require('rhea-promise');
 const { merge, get, pick } = require('./utils');
 
 const ChannelDirections = {
   In: 'in',
   Out: 'out'
+};
+
+const ReceiverSettleMode = {
+  AutoSettle: 0,
+  SettleOnDisposition: 1
 };
 
 class Application {
@@ -62,9 +68,6 @@ class Application {
       .on(ConnectionEvents.connectionError, (ctx) => {
         this._logger.debug('connection error.', ctx.error);
       })
-      .on(ConnectionEvents.error, (ctx) => {
-        this._logger.debug('error.', ctx.error);
-      })
       .on(ConnectionEvents.protocolError, (ctx) => {
         this._logger.debug('protocol error.', ctx.error);
       })
@@ -100,7 +103,8 @@ class Application {
 
     await Promise.all(channelNames.map(async (name) => {
       if (channels[name].direction === ChannelDirections.In) {
-        // TODO: reciever
+        const reciever = await this._createReciever(name);
+        this._recievers.set(name, reciever);
       } else {
         const sender = await this._createSender(name);
         this._senders.set(name, sender);
@@ -108,6 +112,60 @@ class Application {
     }));
 
     this._logger.info('links created.');
+  }
+
+  async _createSender(channelName) {
+    this._logger.debug(`sender for '${channelName}' creating...`);
+
+    const { channels } = this._options;
+    const { amqp: amqpOpts } = channels[channelName];
+    const [process, channel] = channelName.split('.');
+
+    const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), amqpOpts);
+    const sender = await this._connection.createAwaitableSender(process, channel, senderOpts);
+
+    this._logger.info(`sender for '${channelName}' created.`);
+
+    return sender;
+  }
+
+  async _createReciever(channelName) {
+    this._logger.debug(`reciever for '${channelName}' creating...`);
+
+    const { channels } = this._options;
+    const { handler, amqp: amqpOpts = {} } = channels[channelName];
+    const [process, channel] = channelName.split('.');
+
+    const recieverOpts = merge({}, get(this._options, 'amqp.reciever', {}), amqpOpts, {
+      rcv_settle_mode: ReceiverSettleMode.SettleOnDisposition
+    });
+
+    const reciever = await this._connection.createReceiver(process, channel, recieverOpts);
+
+    reciever.on(ReceiverEvents.receiverError, (err) => {
+      this._logger.debug(`reciever for '${channelName}' error`, err);
+    });
+
+    reciever.on(ReceiverEvents.message, async (ctx) => {
+      const { delivery, message } = ctx;
+      // TODO: convert message_id (?buffer form 1c)
+      const { message_id: messageId } = message;
+
+      this._logger.debug(`message ${messageId} recieved from '${channelName}.'`);
+
+      try {
+        await handler.bind(this._service)(message);
+        delivery.accept();
+        this._logger.info(`message ${messageId} recieved from '${channelName}' accepted.`);
+      } catch (err) {
+        delivery.reject();
+        this._logger.error(`message ${messageId} recieved from '${channelName}' rejected.`, err);
+      }
+    });
+
+    this._logger.info(`reciever for '${channelName}' created.`);
+
+    return reciever;
   }
 
   async _closeLinks() {
@@ -120,20 +178,6 @@ class Application {
     await Promise.all(links.map((link) => link.close()));
 
     this._logger.info('links closed.');
-  }
-
-  async _createSender(channelName) {
-    this._logger.debug(`sender for '${channelName}' creating...`);
-
-    const { channels } = this._options;
-    const [process, channel] = channelName.split('.');
-
-    const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), channels[channelName].amqp);
-    const sender = await this._connection.createAwaitableSender(process, channel, senderOpts);
-
-    this._logger.info(`sender for '${channelName}' created.`);
-
-    return sender;
   }
 
   _createLogger() {

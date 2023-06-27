@@ -26,10 +26,10 @@ module.exports = {
           channel_max: 7000,
         },
 
-        // https://github.com/amqp/rhea#sender
+        // https://github.com/amqp/rhea#open_senderaddressoptions
         sender: {},
 
-        // https://github.com/amqp/rhea#receiver
+        // https://github.com/amqp/rhea#open_receiveraddressoptions
         receiver: {}
       },
     },
@@ -72,7 +72,7 @@ module.exports = {
       const message = this._createMessage(params);
       const delivery = await sender.send(message);
 
-      this.logger.info(`1C:ESB application '${appId}': sent message ${message.message_id} to '${channelName}'.`);
+      this.logger.info(`1C:ESB application '${appId}': message ${message.message_id} sent to '${channelName}'.`);
 
       return delivery;
     },
@@ -95,7 +95,6 @@ module.exports = {
       } else {
         message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
         message.content_type = 'application/json';
-        message.content_encoding = 'utf8';
       }
 
       if (message.content_type) {
