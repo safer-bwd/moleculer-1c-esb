@@ -23,7 +23,7 @@ class Application {
     this._recievers = new Map();
 
     this._service = service;
-    this._logger = this._createLogger();
+    this._logger = this._initLogger();
   }
 
   async connect() {
@@ -180,7 +180,7 @@ class Application {
     this._logger.info('links closed.');
   }
 
-  _createLogger() {
+  _initLogger() {
     const prefix = `1C:ESB application '${this._id}':`;
 
     const methods = ['info', 'warn', 'error', 'debug'];
