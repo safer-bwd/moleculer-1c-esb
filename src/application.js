@@ -35,6 +35,18 @@ class Application {
     this._logger.info('closed.');
   }
 
+  getSender(channelName) {
+    return this._senders.get(channelName);
+  }
+
+  getReciever(channelName) {
+    return this._recievers.get(channelName);
+  }
+
+  isConnected() {
+    return this._connection && this._connection.isOpen();
+  }
+
   async _openConnection() {
     const connOpts = merge(pick(this._options, [
       'url', 'clientKey', 'clientSecret', 'reconnect', 'defaultOperationTimeoutInSeconds'
