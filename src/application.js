@@ -161,15 +161,15 @@ class Application {
       // TODO: convert message_id (?buffer form 1c)
       const { message_id: messageId } = message;
 
-      this._logger.debug(`message ${messageId} recieved from '${channelName}.'`);
+      this._logger.debug(`message ${messageId} recieved from '${channelName}'.`);
 
       try {
         await handler.bind(this._service)(message);
         delivery.accept();
-        this._logger.info(`message ${messageId} recieved from '${channelName}' accepted.`);
+        this._logger.info(`message ${messageId} from '${channelName}' accepted.`);
       } catch (err) {
         delivery.reject();
-        this._logger.error(`message ${messageId} recieved from '${channelName}' rejected.`, err);
+        this._logger.error(`message ${messageId} from '${channelName}' rejected.`, err);
       }
     });
 
