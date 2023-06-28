@@ -158,7 +158,15 @@ class Application {
 
     reciever.on(ReceiverEvents.message, async (ctx) => {
       const { delivery, message } = ctx;
-      // TODO: convert message_id (?buffer form 1c)
+
+      if (Buffer.isBuffer(message.message_id)) {
+        message.correlation_id = message.correlation_id.toString('utf8');
+      }
+
+      if (Buffer.isBuffer(message.correlation_id)) {
+        message.correlation_id = message.correlation_id.toString('utf8');
+      }
+
       const { message_id: messageId } = message;
 
       this._logger.debug(`message ${messageId} recieved from '${channelName}'.`);
