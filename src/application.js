@@ -160,7 +160,7 @@ class Application {
       const { delivery, message } = ctx;
 
       if (Buffer.isBuffer(message.message_id)) {
-        message.correlation_id = message.correlation_id.toString('utf8');
+        message.message_id = message.message_id.toString('utf8');
       }
 
       if (Buffer.isBuffer(message.correlation_id)) {
