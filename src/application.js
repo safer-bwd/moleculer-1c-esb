@@ -108,7 +108,8 @@ class Application {
     const channelNames = Object.keys(channels);
 
     await Promise.all(channelNames.map(async (name) => {
-      if (channels[name].direction === ChannelDirections.In) {
+      const direction = channels[name].direction.toLowerCase();
+      if (direction === ChannelDirections.In) {
         const reciever = await this._createReciever(name);
         this._recievers.set(name, reciever);
       } else {
@@ -140,7 +141,7 @@ class Application {
   }
 
   async _createReciever(channelName) {
-    this._logger.debug(`reciever for '${channelName}' creating...`);
+    this._logger.info(`reciever for '${channelName}' creating...`);
 
     const { channels } = this._options;
     const { handler, amqp: amqpOpts = {} } = channels[channelName];
