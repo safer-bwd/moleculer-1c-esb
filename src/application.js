@@ -118,7 +118,7 @@ class Application {
       }
     }));
 
-    this._logger.info('links created.');
+    this._logger.debug('links created.');
   }
 
   async _createSender(channelName) {
@@ -196,7 +196,7 @@ class Application {
 
     await Promise.all(links.map((link) => link.close()));
 
-    this._logger.info('links closed.');
+    this._logger.debug('links closed.');
   }
 
   _initLogger() {
