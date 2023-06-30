@@ -5,6 +5,35 @@ const Application = require('./application');
 
 const defaultOperationTimeoutInSeconds = 60;
 
+const createMessage = (payload, options = {}) => {
+  const message = merge({}, options);
+  message.application_properties = message.application_properties || {};
+
+  if (!message.message_id) {
+    message.message_id = uuid();
+    message.application_properties.integ_message_id = message.message_id;
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    message.body = rheaMessage.data_section(payload);
+  } else if (isString(payload)) {
+    message.body = rheaMessage.data_section(Buffer.from(payload, 'utf8'));
+  } else {
+    message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
+    message.content_type = 'application/json';
+  }
+
+  if (message.content_type) {
+    message.application_properties.contentType = message.content_type;
+  }
+
+  if (message.content_encoding) {
+    message.application_properties.contentEncoding = message.content_encoding;
+  }
+
+  return message;
+};
+
 module.exports = {
   settings: {
     esb: {
@@ -53,7 +82,9 @@ module.exports = {
 
   methods: {
     async sendToChannel(params = {}) {
-      const { application: appId, channel: channelName } = params;
+      const {
+        application: appId, channel, payload, options = {}
+      } = params;
 
       const app = this.applications.get(appId);
       if (!app) {
@@ -64,48 +95,17 @@ module.exports = {
         throw new MoleculerRetryableError(`1C:ESB application '${appId}' is not available`, 503);
       }
 
-      const sender = app.getSender(channelName);
+      const sender = app.getSender(channel);
       if (!sender) {
-        throw new MoleculerError(`1C:ESB application '${appId}': sender for '${channelName}' is not found`, 400);
+        throw new MoleculerError(`1C:ESB application '${appId}': sender for '${channel}' is not found`, 400);
       }
 
-      const message = this._createMessage(params);
+      const message = createMessage(payload, options);
       const delivery = await sender.send(message);
 
-      this.logger.info(`1C:ESB application '${appId}': message ${message.message_id} sent to '${channelName}'.`);
+      this.logger.info(`1C:ESB application '${appId}': message ${message.message_id} sent to '${channel}'.`);
 
       return delivery;
-    },
-
-    _createMessage(params = {}) {
-      const { payload, options = {} } = params;
-
-      const message = merge({}, options);
-      message.application_properties = message.application_properties || {};
-
-      if (!message.message_id) {
-        message.message_id = uuid();
-        message.application_properties.integ_message_id = message.message_id;
-      }
-
-      if (Buffer.isBuffer(payload)) {
-        message.body = rheaMessage.data_section(payload);
-      } else if (isString(payload)) {
-        message.body = rheaMessage.data_section(Buffer.from(payload, 'utf8'));
-      } else {
-        message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
-        message.content_type = 'application/json';
-      }
-
-      if (message.content_type) {
-        message.application_properties.contentType = message.content_type;
-      }
-
-      if (message.content_encoding) {
-        message.application_properties.contentEncoding = message.content_encoding;
-      }
-
-      return message;
     },
   },
 
