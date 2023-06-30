@@ -215,15 +215,7 @@ class ApplicationWorker {
     reciever.on(ReceiverEvents.message, async (ctx) => {
       const { delivery, message } = ctx;
 
-      if (Buffer.isBuffer(message.message_id)) {
-        message.message_id = message.message_id.toString('utf8');
-      }
-
-      if (Buffer.isBuffer(message.correlation_id)) {
-        message.correlation_id = message.correlation_id.toString('utf8');
-      }
-
-      const { message_id: messageId } = message;
+      const messageId = Buffer.isBuffer(message.message_id) ? message.message_id.toString('utf8') : message.message_id;
 
       this._logger.info(`message ${messageId} recieved from '${channelName}'.`);
 
