@@ -1,5 +1,5 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
-const { ReceiverEvents, SenderEvents } = require('rhea-promise');
+const { ReceiverEvents, SenderEvents, message: rheaMessage } = require('rhea-promise');
 const {
   backOff, get, merge, noop, pick
 } = require('./utils');
@@ -7,11 +7,6 @@ const {
 const ChannelDirections = {
   In: 'in',
   Out: 'out'
-};
-
-const ReceiverSettleMode = {
-  AutoSettle: 0,
-  SettleOnDisposition: 1
 };
 
 const States = {
@@ -208,7 +203,7 @@ class ApplicationWorker {
     const [process, channel] = channelName.split('.');
 
     const recieverOpts = merge({}, get(this._options, 'amqp.reciever', {}), amqpOpts, {
-      rcv_settle_mode: ReceiverSettleMode.SettleOnDisposition
+      autoaccept: false,
     });
 
     const reciever = await this._connection.createReceiver(process, channel, recieverOpts);
@@ -230,15 +225,24 @@ class ApplicationWorker {
 
       const { message_id: messageId } = message;
 
-      this._logger.debug(`message ${messageId} recieved from '${channelName}'.`);
+      this._logger.info(`message ${messageId} recieved from '${channelName}'.`);
 
       try {
-        await handler.bind(this._service)(message);
+        this._logger.debug(`message ${messageId} from '${channelName}' processing...`);
         delivery.accept();
-        this._logger.info(`message ${messageId} from '${channelName}' accepted.`);
+        await handler.bind(this._service)(message, delivery);
+        this._logger.debug(`message ${messageId} from '${channelName}' processed.`);
       } catch (err) {
-        delivery.reject();
-        this._logger.error(`message ${messageId} from '${channelName}' rejected.`, err);
+        delivery.release({ delivery_failed: true });
+        this._logger.warn(`message ${messageId} from '${channelName}' processing error.`, err);
+      }
+
+      if (rheaMessage.is_accepted(delivery.state)) {
+        this._logger.debug(`message ${messageId} from '${channelName}' accepted.`);
+      } else if (rheaMessage.is_rejected(delivery.state)) {
+        this._logger.debug(`message ${messageId} from '${channelName}' rejected.`);
+      } else {
+        this._logger.debug(`message ${messageId} from '${channelName}' released.`);
       }
     });
 
