@@ -221,8 +221,12 @@ class ApplicationWorker {
 
       try {
         this._logger.debug(`message ${messageId} from '${channelName}' processing...`);
-        delivery.accept();
         await handler.bind(this._service)(message, delivery);
+        if (!rheaMessage.is_accepted(delivery.state)
+          && !rheaMessage.is_rejected(delivery.state)
+          && !rheaMessage.is_released(delivery.state)) {
+          delivery.accept();
+        }
         this._logger.debug(`message ${messageId} from '${channelName}' processed.`);
       } catch (err) {
         delivery.release({ delivery_failed: true });
