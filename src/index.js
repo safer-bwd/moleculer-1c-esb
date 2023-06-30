@@ -75,17 +75,16 @@ module.exports = {
         options: { type: 'object', optional: true },
       },
       handler(ctx) {
-        return this.sendToChannel(ctx.params);
+        const {
+          application, channel, payload, options
+        } = ctx.params;
+        return this.sendToChannel(application, channel, payload, options);
       }
     }
   },
 
   methods: {
-    async sendToChannel(params = {}) {
-      const {
-        application: appId, channel, payload, options = {}
-      } = params;
-
+    async sendToChannel(appId, channel, payload, options = {}) {
       const app = this.applications.get(appId);
       if (!app) {
         throw new MoleculerError(`1C:ESB application '${appId}' is not found`, 400);

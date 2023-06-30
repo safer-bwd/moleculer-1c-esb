@@ -29,11 +29,9 @@ const SenderService = {
   actions: {
     unloadOrder(ctx) {
       const { order } = ctx.params;
-      return this.sendToChannel({
-        application: 'portal-trade',
-        channel: 'Основной::ВыгрузкаЗаказов.from_portal',
-        payload: order,
-      });
+      const application = 'portal-trade';
+      const channel = 'Основной::ВыгрузкаЗаказов.from_portal';
+      return this.sendToChannel(application, channel, order);
     }
   },
 };
