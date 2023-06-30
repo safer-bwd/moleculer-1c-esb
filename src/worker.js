@@ -1,6 +1,8 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
 const { ReceiverEvents, SenderEvents } = require('rhea-promise');
-const { merge, get, pick } = require('./utils');
+const {
+  backOff, get, merge, noop, pick
+} = require('./utils');
 
 const ChannelDirections = {
   In: 'in',
@@ -12,12 +14,19 @@ const ReceiverSettleMode = {
   SettleOnDisposition: 1
 };
 
-class Application {
+const States = {
+  Starting: 'starting',
+  Started: 'started',
+  Stopping: 'stopping',
+  Stopped: 'stopped',
+};
+
+class ApplicationWorker {
   constructor(service, options) {
     this._options = options;
+    this._id = options.id;
+    this._state = States.Stopped;
 
-    const { id } = options;
-    this._id = id;
     this._connection = null;
     this._senders = new Map();
     this._recievers = new Map();
@@ -26,25 +35,24 @@ class Application {
     this._logger = this._initLogger();
   }
 
-  async connect() {
-    this._logger.debug('connecting...');
-    this._connection = await this._openConnection();
-    // TODO: reconnect on close
-    await this._createLinks();
-    this._logger.info('connected.');
+  async start() {
+    this._state = States.Starting;
+    this._logger.debug('worker starting...');
+    await this._connect();
+    this._state = States.Started;
+    this._logger.info('worker started.');
+
+    return this;
   }
 
-  async close() {
-    this._logger.debug('closing...');
+  async stop() {
+    this._state = States.Stopping;
+    this._logger.debug('worker stopping...');
+    await this._disconnect();
+    this._state = States.Stopped;
+    this._logger.info('worker stopped.');
 
-    await this._closeLinks();
-    await this._closeConnection();
-
-    this._senders = new Map();
-    this._recievers = new Map();
-    this._connection = null;
-
-    this._logger.info('closed.');
+    return this;
   }
 
   getSender(channelName) {
@@ -59,7 +67,53 @@ class Application {
     return this._connection && this._connection.isOpen();
   }
 
+  async _connect() {
+    this._connection = await this._openConnection();
+
+    const onClose = () => {
+      this._connection.removeListener(ConnectionEvents.connectionClose, onClose);
+      if (this._isStopping) {
+        return;
+      }
+
+      this._connection = null;
+      this._disconnect().catch(noop).then(() => this._reconnect());
+    };
+
+    this._connection.on(ConnectionEvents.connectionClose, onClose);
+
+    await this._createLinks();
+  }
+
+  async _disconnect() {
+    await this._closeLinks();
+    await this._closeConnection();
+    this._senders = new Map();
+    this._recievers = new Map();
+    this._connection = null;
+  }
+
+  async _reconnect() {
+    this._logger.debug('start reconnecting...');
+
+    const handler = async () => {
+      if (this._state === States.Started) {
+        await this._connect();
+      }
+    };
+
+    backOff(handler, {
+      delayFirstAttempt: true,
+      startingDelay: this._options.reconnect.initialDelay,
+      maxDelay: this._options.reconnect.maxDelay,
+      numOfAttempts: Infinity,
+      retry: () => this._state === States.Started,
+    }).catch(noop);
+  }
+
   async _openConnection() {
+    this._logger.debug('connection opening...');
+
     const connOpts = merge(pick(this._options, [
       'url', 'clientKey', 'clientSecret', 'reconnect', 'defaultOperationTimeoutInSeconds'
     ]), {
@@ -78,13 +132,15 @@ class Application {
         this._logger.debug('protocol error.', ctx.error);
       })
       .on(ConnectionEvents.disconnected, (ctx) => {
-        this._logger.info('disconnected.', ctx.error);
+        this._logger.warn('disconnected.', ctx.error);
       })
-      .on(ConnectionEvents.connectionClose, () => {
-        this._logger.info('connection closed.');
+      .on(ConnectionEvents.connectionClose, (ctx) => {
+        if (this._isStopping) {
+          this._logger.info('connection closed.');
+        } else {
+          this._logger.warn('connection closed by peer.', ctx.error || '');
+        }
       });
-
-    this._logger.debug('connection opening...');
 
     try {
       await connection.open();
@@ -97,6 +153,10 @@ class Application {
   }
 
   async _closeConnection() {
+    if (!this._connection) {
+      return;
+    }
+
     this._logger.debug('connection closing...');
     await this._connection.close();
   }
@@ -122,7 +182,7 @@ class Application {
   }
 
   async _createSender(channelName) {
-    this._logger.debug(`sender for '${channelName}' creating...`);
+    this._logger.debug(`sender for channel '${channelName}' creating...`);
 
     const { channels } = this._options;
     const { amqp: amqpOpts } = channels[channelName];
@@ -135,13 +195,13 @@ class Application {
       this._logger.debug(`sender for '${channelName}' error`, err);
     });
 
-    this._logger.info(`sender for '${channelName}' created.`);
+    this._logger.info(`sender for channel '${channelName}' created.`);
 
     return sender;
   }
 
   async _createReciever(channelName) {
-    this._logger.info(`reciever for '${channelName}' creating...`);
+    this._logger.debug(`reciever for channel '${channelName}' creating...`);
 
     const { channels } = this._options;
     const { handler, amqp: amqpOpts = {} } = channels[channelName];
@@ -154,7 +214,7 @@ class Application {
     const reciever = await this._connection.createReceiver(process, channel, recieverOpts);
 
     reciever.on(ReceiverEvents.receiverError, (err) => {
-      this._logger.debug(`reciever for '${channelName}' error`, err);
+      this._logger.debug(`reciever for channel '${channelName}' error`, err);
     });
 
     reciever.on(ReceiverEvents.message, async (ctx) => {
@@ -182,17 +242,21 @@ class Application {
       }
     });
 
-    this._logger.info(`reciever for '${channelName}' created.`);
+    this._logger.info(`reciever for channel '${channelName}' created.`);
 
     return reciever;
   }
 
   async _closeLinks() {
-    this._logger.debug('links closing...');
-
     const links = []
       .concat(Array.from(this._senders.values()))
       .concat(Array.from(this._recievers.values()));
+
+    if (links.length === 0) {
+      return;
+    }
+
+    this._logger.debug('links closing...');
 
     await Promise.all(links.map((link) => link.close()));
 
@@ -212,4 +276,4 @@ class Application {
   }
 }
 
-module.exports = Application;
+module.exports = ApplicationWorker;

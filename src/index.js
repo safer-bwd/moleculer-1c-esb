@@ -1,9 +1,7 @@
 const { MoleculerError, MoleculerRetryableError } = require('moleculer').Errors;
 const { generate_uuid: uuid, message: rheaMessage } = require('rhea-promise');
 const { isString, merge } = require('./utils');
-const Application = require('./application');
-
-const defaultOperationTimeoutInSeconds = 60;
+const ApplicationWorker = require('./worker');
 
 const createMessage = (payload, options = {}) => {
   const message = merge({}, options);
@@ -33,6 +31,8 @@ const createMessage = (payload, options = {}) => {
 
   return message;
 };
+
+const defaultOperationTimeoutInSeconds = 60;
 
 module.exports = {
   settings: {
@@ -85,16 +85,16 @@ module.exports = {
 
   methods: {
     async sendToChannel(appId, channel, payload, options = {}) {
-      const app = this.applications.get(appId);
-      if (!app) {
+      const worker = this.$workers.get(appId);
+      if (!worker) {
         throw new MoleculerError(`1C:ESB application '${appId}' is not found`, 400);
       }
 
-      if (!app.isConnected()) {
+      if (!worker.isConnected()) {
         throw new MoleculerRetryableError(`1C:ESB application '${appId}' is not available`, 503);
       }
 
-      const sender = app.getSender(channel);
+      const sender = worker.getSender(channel);
       if (!sender) {
         throw new MoleculerError(`1C:ESB application '${appId}': sender for '${channel}' is not found`, 400);
       }
@@ -109,47 +109,47 @@ module.exports = {
   },
 
   created() {
-    this.applications = new Map();
+    this.$workers = new Map();
 
     const appIDs = Object.keys(this.schema.applications);
     if (appIDs.length === 0) {
       return;
     }
 
-    this.logger.debug('1C:ESB applications creating...');
+    this.logger.debug('1C:ESB applications workers creating...');
 
     appIDs.forEach((id) => {
       const options = merge({}, this.settings.esb, this.schema.applications[id], { id });
-      const app = new Application(this, options);
-      this.applications.set(id, app);
+      const worker = new ApplicationWorker(this, options);
+      this.$workers.set(id, worker);
     });
 
-    this.logger.debug('1C:ESB applications created.');
+    this.logger.debug('1C:ESB applications workers created.');
   },
 
   async started() {
-    if (this.applications.size === 0) {
+    if (this.$workers.size === 0) {
       return;
     }
 
-    this.logger.debug('1C:ESB applications connecting...');
+    this.logger.debug('1C:ESB applications workers starting...');
 
-    const apps = Array.from(this.applications.values());
-    await Promise.all(apps.map((app) => app.connect()));
+    const workers = Array.from(this.$workers.values());
+    await Promise.all(workers.map((worker) => worker.start()));
 
-    this.logger.debug('1C:ESB applications connected.');
+    this.logger.debug('1C:ESB applications workers started.');
   },
 
   async stopped() {
-    if (this.applications.size === 0) {
+    if (this.$workers.size === 0) {
       return;
     }
 
-    this.logger.debug('1C:ESB applications closing...');
+    this.logger.debug('1C:ESB applications workers stopping...');
 
-    const apps = Array.from(this.applications.values());
-    await Promise.all(apps.map((app) => app.close()));
+    const workers = Array.from(this.$workers.values());
+    await Promise.all(workers.map((worker) => worker.stop()));
 
-    this.logger.debug('1C:ESB applications closed.');
+    this.logger.debug('1C:ESB applications workers stopped.');
   },
 };
