@@ -67,7 +67,7 @@ class ApplicationWorker {
 
     const onClose = () => {
       this._connection.removeListener(ConnectionEvents.connectionClose, onClose);
-      if (this._isStopping) {
+      if (this._state === States.Stopping) {
         return;
       }
 
@@ -130,7 +130,7 @@ class ApplicationWorker {
         this._logger.warn('disconnected.', ctx.error);
       })
       .on(ConnectionEvents.connectionClose, (ctx) => {
-        if (this._isStopping) {
+        if (this._state === States.Stopping) {
           this._logger.info('connection closed.');
         } else {
           this._logger.warn('connection closed by peer.', ctx.error || '');
