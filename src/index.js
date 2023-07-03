@@ -78,7 +78,7 @@ module.exports = {
         const {
           application, channel, payload, options
         } = ctx.params;
-        
+
         const { message } = await this.sendToChannel(application, channel, payload, options);
 
         return message;
