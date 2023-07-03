@@ -123,8 +123,13 @@ module.exports = {
 
     appIDs.forEach((id) => {
       const options = merge({}, this.settings.esb, this.schema.applications[id], { id });
+      if (!options.channels || Object.keys(options.channels).length === 0) {
+        this.logger.debug(`1C:ESB application '${id}': worker not created: channel list is empty.`);
+        return;
+      }
       const worker = new ApplicationWorker(this, options);
       this.$workers.set(id, worker);
+      this.logger.debug(`1C:ESB application '${id}': worker created.`);
     });
 
     this.logger.debug('1C:ESB applications workers created.');
