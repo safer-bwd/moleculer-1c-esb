@@ -26,7 +26,6 @@ const RecieverService = {
             const payload = get(message.body, 'content', message.body);
             const json = isString(payload) ? payload : payload.toString('utf8');
             const order = JSON.parse(json);
-            // eslint-disable-next-line no-console
             this.logger.warn('Upload order', order);
           }
         }
