@@ -74,11 +74,14 @@ module.exports = {
         payload: { type: 'any' },
         options: { type: 'object', optional: true },
       },
-      handler(ctx) {
+      async handler(ctx) {
         const {
           application, channel, payload, options
         } = ctx.params;
-        return this.sendToChannel(application, channel, payload, options);
+        
+        const { message } = await this.sendToChannel(application, channel, payload, options);
+
+        return message;
       }
     }
   },
@@ -104,7 +107,7 @@ module.exports = {
 
       this.logger.info(`1C:ESB application '${appId}': message ${message.message_id} sent to '${channel}'.`);
 
-      return delivery;
+      return { message, delivery };
     },
   },
 
