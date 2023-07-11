@@ -12,21 +12,18 @@ const createMessage = (payload, options = {}) => {
     message.application_properties.integ_message_id = message.message_id;
   }
 
+  let contentType;
   if (Buffer.isBuffer(payload)) {
     message.body = rheaMessage.data_section(payload);
   } else if (isString(payload)) {
     message.body = rheaMessage.data_section(Buffer.from(payload, 'utf8'));
   } else {
     message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
-    message.content_type = 'application/json';
+    contentType = 'application/json';
   }
 
-  if (message.content_type) {
-    message.application_properties.contentType = message.content_type;
-  }
-
-  if (message.content_encoding) {
-    message.application_properties.contentEncoding = message.content_encoding;
+  if (!message.application_properties.ContentType && contentType) {
+    message.application_properties.ContentType = contentType;
   }
 
   return message;
