@@ -1,5 +1,4 @@
 const { ServiceBroker } = require('moleculer');
-const { delay } = require('rhea-promise');
 const ESBMixin = require('../src');
 
 const SenderService = {
@@ -42,13 +41,11 @@ const broker = new ServiceBroker({
 
 broker.createService(SenderService);
 
-(async () => {
-  await broker.start();
+const order = { id: 1, number: '1', description: 'Order #1' };
 
-  await broker.call('sender.unloadOrder', {
-    order: { id: 1, number: '1', description: 'Order #1' }
-  });
-
-  await delay(5 * 1000);
-  await broker.stop();
-})().catch((err) => console.log('Error', err)); // eslint-disable-line no-console
+broker
+  .start()
+  .then(() => broker.call('sender.unloadOrder', { order }))
+  .delay(5 * 1000)
+  .then(() => broker.stop())
+  .catch((err) => console.log('Error', err)); // eslint-disable-line no-console
