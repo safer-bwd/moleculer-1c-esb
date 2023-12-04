@@ -59,7 +59,7 @@ const States = {
 function Logger(worker) {
   this._worker = worker;
 
-  const prefix = `1C:ESB application '${this._worker.applicationId}':`;
+  const prefix = `1C:ESB '${this._worker.applicationId}':`;
   const methods = ['info', 'warn', 'error', 'debug', 'trace'];
   methods.forEach((method) => {
     this[method] = this._worker.service.logger[method].bind(this, prefix);
@@ -91,7 +91,7 @@ class ApplicationWorker {
 
     // Logger
     this._logger = new Logger(this);
-    this._logger.debug('worker created.');
+    this._logger.debug('created.');
   }
 
   get applicationId() {
@@ -117,7 +117,7 @@ class ApplicationWorker {
     this._tryConnect().catch(noop);
 
     this._state = States.Started;
-    this._logger.debug('worker started');
+    this._logger.info('worker started');
 
     return Promise.resolve(this);
   }
@@ -194,7 +194,7 @@ class ApplicationWorker {
       maxDelay,
       timeMultiple,
     }).catch((err) => {
-      this._logger.error('Worker fatal error (reconnect cancled).', err);
+      this._logger.error('worker fatal error.', err);
       throw err;
     });
   }
@@ -233,22 +233,19 @@ class ApplicationWorker {
     const connection = new Connection(connOpts);
     connection
       .on(ConnectionEvents.connectionOpen, () => {
-        this._logger.info('connection opened.');
+        this._logger.info(`connection '${connection.id}' opened.`);
       })
       .on(ConnectionEvents.connectionError, (ctx) => {
-        this._logger.error('connection error.', ctx.error);
+        this._logger.error(`connection '${connection.id}' error.`, ctx.error);
       })
       .on(ConnectionEvents.protocolError, (ctx) => {
-        this._logger.error('connection protocol error.', ctx.error);
-      })
-      .on(ConnectionEvents.error, (ctx) => {
-        this._logger.error('connection error.', ctx.error);
+        this._logger.error(`connection '${connection.id}' protocol error.`, ctx.error);
       })
       .on(ConnectionEvents.disconnected, (ctx) => {
-        this._logger.info('connection disconnected.', ctx.error);
+        this._logger.info(`connection '${connection.id}' disconnected.`, ctx.error);
       })
       .on(ConnectionEvents.connectionClose, () => {
-        this._logger.info('connection closed.');
+        this._logger.info(`connection '${connection.id}' closed.`);
       });
 
     await connection.open(options);
@@ -315,7 +312,7 @@ class ApplicationWorker {
       throw err;
     }
 
-    this._logger.info('links created.');
+    this._logger.debug('links created.');
   }
 
   async _createReciever(channelName, options = {}) {
@@ -452,8 +449,7 @@ class ApplicationWorker {
   async _closeLinks() {
     const links = []
       .concat(Array.from(this._senders.values()))
-      .concat(Array.from(this._recievers.values()))
-      .filter((link) => link.isOpen());
+      .concat(Array.from(this._recievers.values()));
 
     if (links.length === 0) {
       this._recievers = new Map();
@@ -467,21 +463,15 @@ class ApplicationWorker {
       await Promise.all(links.map((link) => link.close({ closeSession: false })));
     } catch (err) {
       this._logger.error('failed to close links.', err);
-      throw err;
     }
 
     this._recievers = new Map();
     this._senders = new Map();
-    this._logger.info('links closed.');
+    this._logger.debug('links closed.');
   }
 
   async _closeSession() {
     if (!this._session) {
-      return;
-    }
-
-    if (!this._session.isOpen()) {
-      this._session = null;
       return;
     }
 
@@ -491,19 +481,14 @@ class ApplicationWorker {
       await this._session.close();
     } catch (err) {
       this._logger.error('failed to close session.', err);
-      throw err;
     }
 
     this._session = null;
+    this._logger.debug('session closed.');
   }
 
   async _closeConnection() {
     if (!this._connection) {
-      return;
-    }
-
-    if (!this._connection.isOpen()) {
-      this._connection = null;
       return;
     }
 
@@ -513,10 +498,10 @@ class ApplicationWorker {
       await this._connection.close();
     } catch (err) {
       this._logger.error('failed to close connection.', err);
-      throw err;
     }
 
     this._connection = null;
+    this._logger.debug('connection closed.');
   }
 
   async _clear() {
