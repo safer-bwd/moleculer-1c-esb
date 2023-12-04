@@ -91,7 +91,7 @@ class ApplicationWorker {
 
     // Logger
     this._logger = new Logger(this);
-    this._logger.debug('created.');
+    this._logger.debug('worker created.');
   }
 
   get applicationId() {
@@ -117,7 +117,7 @@ class ApplicationWorker {
     this._tryConnect().catch(noop);
 
     this._state = States.Started;
-    this._logger.info('worker started');
+    this._logger.info('worker started.');
 
     return Promise.resolve(this);
   }
