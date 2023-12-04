@@ -1,6 +1,6 @@
 const { ServiceBroker } = require('moleculer');
 const ESBMixin = require('../src');
-const { get, isString } = require('../src/utils');
+const { isString } = require('../src/utils');
 
 const RecieverService = {
   name: 'reciever',
@@ -10,7 +10,7 @@ const RecieverService = {
   ],
 
   settings: {
-    esb: {}
+    esb: { operationTimeoutInSeconds: 5 }
   },
 
   applications: {
@@ -21,11 +21,10 @@ const RecieverService = {
       channels: {
         'Основной::ВыгрузкаЗаказов.to_trade': {
           direction: 'in',
-          handler(message) {
-            const payload = get(message.body, 'content', message.body);
+          handler(message, payload) {
             const json = isString(payload) ? payload : payload.toString('utf8');
             const order = JSON.parse(json);
-            this.logger.warn('Upload order', order);
+            this.logger.warn(`Upload order (message ${message.message_id}):`, order);
           }
         }
       }

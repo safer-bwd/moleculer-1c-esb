@@ -9,7 +9,7 @@ const SenderService = {
   ],
 
   settings: {
-    esb: {}
+    esb: { operationTimeoutInSeconds: 5 }
   },
 
   applications: {
@@ -26,7 +26,7 @@ const SenderService = {
   },
 
   actions: {
-    unloadOrder(ctx) {
+    async unloadOrder(ctx) {
       const { order } = ctx.params;
       const application = 'portal-trade';
       const channel = 'Основной::ВыгрузкаЗаказов.from_portal';

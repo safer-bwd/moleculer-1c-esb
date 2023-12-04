@@ -1,46 +1,17 @@
-const { MoleculerError, MoleculerRetryableError } = require('moleculer').Errors;
-const { generate_uuid: uuid, message: rheaMessage } = require('rhea-promise');
-const { isString, merge } = require('./utils');
+const { merge } = require('./utils');
 const ApplicationWorker = require('./worker');
-
-const createMessage = (payload, options = {}) => {
-  const message = merge({}, options);
-  message.application_properties = message.application_properties || {};
-
-  if (!message.message_id) {
-    message.message_id = uuid();
-    message.application_properties.integ_message_id = message.message_id;
-  }
-
-  let contentType;
-  if (Buffer.isBuffer(payload)) {
-    message.body = rheaMessage.data_section(payload);
-  } else if (isString(payload)) {
-    message.body = rheaMessage.data_section(Buffer.from(payload, 'utf8'));
-  } else {
-    message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
-    contentType = 'application/json';
-  }
-
-  if (!message.application_properties.ContentType && contentType) {
-    message.application_properties.ContentType = contentType;
-  }
-
-  return message;
-};
-
-const defaultOperationTimeoutInSeconds = 60;
 
 module.exports = {
   settings: {
     esb: {
       reconnect: {
-        initialDelay: 100,
+        numOfAttempts: Infinity,
+        startingDelay: 100,
         maxDelay: 60 * 1000,
-        limit: Infinity,
+        timeMultiple: 2,
       },
 
-      operationTimeoutInSeconds: defaultOperationTimeoutInSeconds,
+      operationTimeoutInSeconds: 60,
 
       // https://github.com/amqp/rhea
       amqp: {
@@ -50,6 +21,11 @@ module.exports = {
           port: 6698,
           max_frame_size: 1000000,
           channel_max: 7000,
+          reconnect: {
+            reconnect_limit: 10,
+            initial_reconnect_delay: 100,
+            max_reconnect_delay: 60 * 1000,
+          },
         },
 
         // https://github.com/amqp/rhea#open_senderaddressoptions
@@ -84,52 +60,38 @@ module.exports = {
   },
 
   methods: {
-    async sendToChannel(appId, channel, payload, options = {}) {
+    async sendToChannel(appId, channelName, payload, options = {}) {
       const worker = this.$workers.get(appId);
       if (!worker) {
-        throw new MoleculerError(`1C:ESB application '${appId}' is not found`, 400);
+        throw new Error(`Worker for 1C:ESB application with id '${appId}' not found!`);
       }
 
-      if (!worker.isConnected()) {
-        throw new MoleculerRetryableError(`1C:ESB application '${appId}' is not available`, 503);
-      }
-
-      const sender = worker.getSender(channel);
-      if (!sender) {
-        throw new MoleculerError(`1C:ESB application '${appId}': sender for '${channel}' is not found`, 400);
-      }
-
-      const message = createMessage(payload, options);
-      const delivery = await sender.send(message);
-
-      this.logger.info(`1C:ESB application '${appId}': message ${message.message_id} sent to '${channel}'.`);
-
-      return { message, delivery };
+      return worker.send(channelName, payload, options);
     },
   },
 
   created() {
     this.$workers = new Map();
 
-    const appIDs = Object.keys(this.schema.applications);
-    if (appIDs.length === 0) {
+    const appIds = Object.keys(this.schema.applications);
+    if (appIds.length === 0) {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers creating...');
+    this.logger.debug('1C:ESB applications workers are creating...');
 
-    appIDs.forEach((id) => {
+    appIds.forEach((id) => {
       const options = merge({}, this.settings.esb, this.schema.applications[id], { id });
       if (!options.channels || Object.keys(options.channels).length === 0) {
-        this.logger.debug(`1C:ESB application '${id}': worker not created: channel list is empty.`);
+        this.logger.debug(`Worker for 1C:ESB application with id '${id}' has not been created: channel list is empty.`);
         return;
       }
+
       const worker = new ApplicationWorker(this, options);
       this.$workers.set(id, worker);
-      this.logger.debug(`1C:ESB application '${id}': worker created.`);
     });
 
-    this.logger.debug('1C:ESB applications workers created.');
+    this.logger.info('1C:ESB applications workers created.');
   },
 
   async started() {
@@ -137,12 +99,12 @@ module.exports = {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers starting...');
+    this.logger.debug('1C:ESB applications workers are starting...');
 
     const workers = Array.from(this.$workers.values());
     await Promise.all(workers.map((worker) => worker.start()));
 
-    this.logger.debug('1C:ESB applications workers started.');
+    this.logger.info('1C:ESB applications workers started.');
   },
 
   async stopped() {
@@ -150,11 +112,11 @@ module.exports = {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers stopping...');
+    this.logger.debug('1C:ESB applications workers are stopping...');
 
     const workers = Array.from(this.$workers.values());
     await Promise.all(workers.map((worker) => worker.stop()));
 
-    this.logger.debug('1C:ESB applications workers stopped.');
+    this.logger.info('1C:ESB applications workers stopped.');
   },
 };

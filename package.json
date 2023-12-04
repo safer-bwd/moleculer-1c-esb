@@ -1,6 +1,6 @@
 {
   "name": "moleculer-1c-esb",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Task mixin for 1C:ESB",
   "main": "src/index.js",
   "scripts": {
@@ -33,18 +33,19 @@
     "moleculer": ">=0.14.0"
   },
   "dependencies": {
-    "1c-esb": "^0.2.3",
+    "1c-esb": "^0.4.1",
     "exponential-backoff": "^3.1.1",
     "lodash.get": "^4.4.2",
     "lodash.merge": "^4.6.2",
     "lodash.pick": "^4.4.0",
+    "node-abort-controller": "^3.1.1",
     "rhea-promise": "^3.0.1"
   },
   "devDependencies": {
-    "eslint": "^8.43.0",
+    "eslint": "^8.55.0",
     "eslint-config-airbnb": "^19.0.4",
-    "eslint-plugin-import": "^2.27.5",
-    "moleculer": "^0.14.29"
+    "eslint-plugin-import": "^2.29.0",
+    "moleculer": "^0.14.32"
   },
   "engines": {
     "node": ">= 10.0.0"
