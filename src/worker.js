@@ -1,17 +1,32 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
 const { backOff } = require('exponential-backoff');
+const rheaPromise = require('rhea-promise');
+
+const {
+  get, merge, noop, pick, isString
+} = require('./utils');
 
 const {
   ReceiverEvents,
   SenderEvents,
   SessionEvents,
   generate_uuid: uuid,
-  message: rheaMessage
-} = require('rhea-promise');
+  message: rheaMessage,
+} = rheaPromise;
 
-const {
-  get, merge, noop, pick, isString
-} = require('./utils');
+// hack 'rhea-promise https://github.com/amqp/rhea-promise/issues/109 -->
+Object.defineProperty(rheaPromise.Receiver.prototype, 'address', {
+  get() {
+    return get(this, 'source.address', '');
+  }
+});
+
+Object.defineProperty(rheaPromise.AwaitableSender.prototype, 'address', {
+  get() {
+    return get(this, 'target.address', '');
+  }
+});
+// <--
 
 if (!global.AbortController) {
   // eslint-disable-next-line global-require
