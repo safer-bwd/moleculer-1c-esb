@@ -66,7 +66,9 @@ module.exports = {
         throw new Error(`Worker for 1C:ESB application with id '${appId}' not found!`);
       }
 
-      return worker.send(channelName, payload, options);
+      const res = await worker.send(channelName, payload, options);
+
+      return res;
     },
   },
 

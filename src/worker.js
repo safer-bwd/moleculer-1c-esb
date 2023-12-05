@@ -123,26 +123,29 @@ class ApplicationWorker {
   }
 
   async send(channelName, payload, options = {}) {
+    if (!this._isConnectionOpen()) {
+      throw new Error('Connection is not opened!');
+    }
+
+    if (!this._isSessionOpen()) {
+      throw new Error('Session is not opened!');
+    }
+
+    const sender = this._getSender(channelName);
+    if (!sender) {
+      throw new Error(`Channel '${channelName}' not found!`);
+    }
+
     this._logger.debug(`sending message to '${channelName}'...`);
 
     let message;
     let delivery;
     try {
-      if (!this._isConnectionOpen()) {
-        throw new Error('Connection is not opened!');
-      }
-
-      if (!this._isSessionOpen()) {
-        throw new Error('Session is not opened!');
-      }
-
-      const sender = this._getSender(channelName);
-      if (!sender) {
-        throw new Error(`Channel '${channelName}' not found!`);
-      }
-
       message = createMessage(payload, options);
-      delivery = await sender.send(message);
+      delivery = await sender.send(message, {
+        abortSignal: this._abortController ? this._abortController.signal : null,
+        timeoutInSeconds: this._options.operationTimeoutInSeconds,
+      });
     } catch (err) {
       this._logger.error(`error send message to '${channelName}'.`, err);
       throw err;
@@ -193,7 +196,13 @@ class ApplicationWorker {
       startingDelay,
       maxDelay,
       timeMultiple,
+      retry: (err, attempt) => {
+        this._clear();
+        this._logger.debug(`failed to open connection (attempt = ${attempt})...`);
+        return true;
+      }
     }).catch((err) => {
+      this._clear();
       this._logger.error('worker fatal error.', err);
       throw err;
     });
@@ -208,11 +217,17 @@ class ApplicationWorker {
     await this._createLinks({ abortSignal });
 
     // reconnect
+    let attempt = 0;
     this._connection.on(ConnectionEvents.disconnected, (ctx) => {
-      if (ctx.reconnecting) {
-        this._logger.debug('connection is reconnecting...');
-      } else if (this._state === States.Started) {
-        this._logger.debug('connection is reopening...');
+      if (ctx.reconnecting) { // reconnect (rhea promise logic)
+        if (attempt > 0) {
+          this._logger.debug(`connection '${this._connection.id}' failed to reconnect (attempt = ${attempt})...`);
+        }
+        attempt += 1;
+      } else if (this._connection) { // reopen (custom logic)
+        if (attempt > 0) {
+          this._logger.debug(`connection '${this._connection.id}' reconnection cancled.`);
+        }
         this._close()
           .catch(() => this._clear())
           .then(() => this._tryConnect({ delayFirstAttempt: true }))
@@ -236,13 +251,15 @@ class ApplicationWorker {
         this._logger.info(`connection '${connection.id}' opened.`);
       })
       .on(ConnectionEvents.connectionError, (ctx) => {
-        this._logger.error(`connection '${connection.id}' error.`, ctx.error);
+        this._logger.error('connection error.', ctx.error);
       })
       .on(ConnectionEvents.protocolError, (ctx) => {
-        this._logger.error(`connection '${connection.id}' protocol error.`, ctx.error);
+        this._logger.error('connection protocol error.', ctx.error);
       })
       .on(ConnectionEvents.disconnected, (ctx) => {
-        this._logger.info(`connection '${connection.id}' disconnected.`, ctx.error);
+        if (connection.id) {
+          this._logger.info(`connection '${connection.id}' disconnected.`, ctx.error);
+        }
       })
       .on(ConnectionEvents.connectionClose, () => {
         this._logger.info(`connection '${connection.id}' closed.`);
@@ -398,7 +415,6 @@ class ApplicationWorker {
 
     const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), amqpOpts, options, {
       session: this._session,
-      timeoutInSeconds: this._options.operationTimeoutInSeconds,
     });
 
     let sender;
@@ -422,7 +438,7 @@ class ApplicationWorker {
       this._logger.info(`sender '${sender.name}' for channel '${channelName}' closed.`);
     });
 
-    this._logger.info(`sender '${sender.name}' for channel '${channelName}' created: ${sender.name}.`);
+    this._logger.info(`sender for channel '${channelName}' created: ${sender.name}.`);
 
     return sender;
   }
