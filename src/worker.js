@@ -234,6 +234,10 @@ class ApplicationWorker {
           .catch(noop);
       }
     });
+
+    this._connection.on(ConnectionEvents.connectionOpen, () => {
+      attempt = 0;
+    });
   }
 
   async _openConnection(options = {}) {
