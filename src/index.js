@@ -16,8 +16,8 @@ module.exports = {
       // https://github.com/amqp/rhea
       amqp: {
         // https://github.com/amqp/rhea#connectoptions
+        // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
         connection: {
-          // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
           port: 6698,
           max_frame_size: 1000000,
           channel_max: 7000,
@@ -80,7 +80,7 @@ module.exports = {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers are creating...');
+    this.logger.debug('1C:ESB workers are creating...');
 
     appIds.forEach((id) => {
       const options = merge({}, this.settings.esb, this.schema.applications[id], { id });
@@ -93,7 +93,7 @@ module.exports = {
       this.$workers.set(id, worker);
     });
 
-    this.logger.info('1C:ESB applications workers created.');
+    this.logger.info('1C:ESB workers created.');
   },
 
   async started() {
@@ -101,12 +101,12 @@ module.exports = {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers are starting...');
+    this.logger.debug('1C:ESB workers are starting...');
 
     const workers = Array.from(this.$workers.values());
     await Promise.all(workers.map((worker) => worker.start()));
 
-    this.logger.info('1C:ESB applications workers started.');
+    this.logger.info('1C:ESB workers started.');
   },
 
   async stopped() {
@@ -114,11 +114,11 @@ module.exports = {
       return;
     }
 
-    this.logger.debug('1C:ESB applications workers are stopping...');
+    this.logger.debug('1C:ESB workers are stopping...');
 
     const workers = Array.from(this.$workers.values());
     await Promise.all(workers.map((worker) => worker.stop()));
 
-    this.logger.info('1C:ESB applications workers stopped.');
+    this.logger.info('1C:ESB workers stopped.');
   },
 };

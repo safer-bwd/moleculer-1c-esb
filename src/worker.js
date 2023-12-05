@@ -447,10 +447,6 @@ class ApplicationWorker {
     return this._senders.get(channelName);
   }
 
-  _getReciever(channelName) {
-    return this._recievers.get(channelName);
-  }
-
   async _close() {
     if (this._abortController) {
       this._abortController.abort();
@@ -465,7 +461,8 @@ class ApplicationWorker {
   async _closeLinks() {
     const links = []
       .concat(Array.from(this._senders.values()))
-      .concat(Array.from(this._recievers.values()));
+      .concat(Array.from(this._recievers.values()))
+      .filter((link) => !link.isClosed());
 
     if (links.length === 0) {
       this._recievers = new Map();
@@ -491,6 +488,11 @@ class ApplicationWorker {
       return;
     }
 
+    if (this._session.isClosed()) {
+      this._session = null;
+      return;
+    }
+
     this._logger.debug('session is closing...');
 
     try {
@@ -498,13 +500,15 @@ class ApplicationWorker {
     } catch (err) {
       this._logger.error('failed to close session.', err);
     }
-
-    this._session = null;
-    this._logger.debug('session closed.');
   }
 
   async _closeConnection() {
     if (!this._connection) {
+      return;
+    }
+
+    if (!this._connection.isOpen()) {
+      this._connection = null;
       return;
     }
 
@@ -515,9 +519,6 @@ class ApplicationWorker {
     } catch (err) {
       this._logger.error('failed to close connection.', err);
     }
-
-    this._connection = null;
-    this._logger.debug('connection closed.');
   }
 
   async _clear() {
