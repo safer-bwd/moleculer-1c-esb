@@ -459,12 +459,12 @@ class ApplicationWorker {
   }
 
   async _closeLinks() {
-    const links = []
+    const openedLinks = []
       .concat(Array.from(this._senders.values()))
       .concat(Array.from(this._recievers.values()))
       .filter((link) => !link.isClosed());
 
-    if (links.length === 0) {
+    if (openedLinks.length === 0) {
       this._recievers = new Map();
       this._senders = new Map();
       return;
@@ -473,7 +473,7 @@ class ApplicationWorker {
     this._logger.debug('links are closing...');
 
     try {
-      await Promise.all(links.map((link) => link.close({ closeSession: false })));
+      await Promise.all(openedLinks.map((link) => link.close({ closeSession: false })));
     } catch (err) {
       this._logger.error('failed to close links.', err);
     }
