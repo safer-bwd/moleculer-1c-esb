@@ -133,7 +133,11 @@ class ApplicationWorker {
 
     const sender = this._getSender(channelName);
     if (!sender) {
-      throw new Error(`Channel '${channelName}' not found!`);
+      throw new Error(`Sender by channel '${channelName}' not found!`);
+    }
+
+    if (!sender.isOpen()) {
+      throw new Error(`Sender '${sender.name}' is not opened!`);
     }
 
     const message = createMessage(payload, options);
@@ -199,7 +203,7 @@ class ApplicationWorker {
       timeMultiple,
       retry: (err, attempt) => {
         this._clear();
-        this._logger.debug(`failed to open connection (attempt = ${attempt})...`);
+        this._logger.debug(`open connection attempt ${attempt} failed.`);
         return true;
       }
     }).catch((err) => {
@@ -222,13 +226,15 @@ class ApplicationWorker {
 
     this._connection.on(ConnectionEvents.disconnected, (ctx) => {
       if (ctx.reconnecting) { // reconnect (rhea promise logic)
-        if (attempt > 0) {
-          this._logger.debug(`connection '${this._connection.id}' failed to reconnect (attempt = ${attempt})...`);
+        if (attempt === 0) {
+          this._logger.debug(`connection '${this._connection.id}' reconnect started.`);
+        } else {
+          this._logger.debug(`connection '${this._connection.id}' reconnect attempt ${attempt} failed.`);
         }
         attempt += 1;
-      } else if (this._connection) { // reopen (custom logic)
+      } else if (this._connection) { // reopen connection (custom logic)
         if (attempt > 0) {
-          this._logger.debug(`connection '${this._connection.id}' reconnection cancled.`);
+          this._logger.debug(`connection '${this._connection.id}' reconnect canceled.`);
         }
         this._close()
           .catch(() => this._clear())
