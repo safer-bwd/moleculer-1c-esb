@@ -136,24 +136,25 @@ class ApplicationWorker {
       throw new Error(`Channel '${channelName}' not found!`);
     }
 
-    this._logger.debug(`sending message to '${channelName}'...`);
+    const message = createMessage(payload, options);
 
-    let message;
+    this._logger.debug(`message ${message.message_id} is sending to '${channelName}'...`);
+
     let delivery;
     try {
-      message = createMessage(payload, options);
       delivery = await sender.send(message, {
         abortSignal: this._abortController ? this._abortController.signal : null,
         timeoutInSeconds: this._options.operationTimeoutInSeconds,
       });
     } catch (err) {
-      this._logger.error(`error send message to '${channelName}'.`, err);
+      this._logger.error(`failed to send message ${message.message_id} to '${channelName}'.`, err);
       throw err;
     }
 
-    this._logger.info(`sent message ${message.message_id} to '${channelName}'.`);
-    this._logger.trace(`payload of message ${message.message_id}:`, payload);
+    this._logger.info(`message ${message.message_id} sent to '${channelName}'.`);
+
     this._logger.trace(`message ${message.message_id}:`, message);
+    this._logger.trace(`message ${message.message_id} payload:`, payload);
 
     return { message, delivery };
   }
@@ -218,6 +219,7 @@ class ApplicationWorker {
 
     // reconnect
     let attempt = 0;
+
     this._connection.on(ConnectionEvents.disconnected, (ctx) => {
       if (ctx.reconnecting) { // reconnect (rhea promise logic)
         if (attempt > 0) {
@@ -359,15 +361,15 @@ class ApplicationWorker {
 
     reciever.on(ReceiverEvents.receiverError, (ctx) => {
       const err = ctx.receiver && ctx.receiver.error;
-      this._logger.error(`reciever '${reciever.name}' for channel '${channelName}' error`, err);
+      this._logger.error(`reciever '${reciever.name}' error`, err);
     });
 
     reciever.on(ReceiverEvents.receiverOpen, () => {
-      this._logger.info(`reciever '${reciever.name}' for channel '${channelName}' opened.`);
+      this._logger.info(`reciever '${reciever.name}' opened.`);
     });
 
     reciever.on(ReceiverEvents.receiverClose, () => {
-      this._logger.info(`reciever '${reciever.name}' for channel '${channelName}' closed.`);
+      this._logger.info(`reciever '${reciever.name}' closed.`);
     });
 
     reciever.on(ReceiverEvents.message, async (ctx) => {
@@ -382,7 +384,7 @@ class ApplicationWorker {
       this._logger.trace(`message ${messageId}:`, message);
 
       try {
-        this._logger.debug(`processing message ${messageId} from '${channelName}'...`);
+        this._logger.debug(`message ${messageId} is processing...`);
         await handler.bind(this._service)(message, payload, delivery);
         if (!rheaMessage.is_accepted(delivery.state)
           && !rheaMessage.is_rejected(delivery.state)
@@ -391,18 +393,18 @@ class ApplicationWorker {
         }
       } catch (err) {
         delivery.release({ delivery_failed: true });
-        this._logger.warn(`processing error for message ${messageId} from '${channelName}'.`, err);
+        this._logger.error(`failed to process message ${messageId}.`, err);
       }
 
       if (rheaMessage.is_accepted(delivery.state)) {
-        this._logger.debug(`accepted message ${messageId} from '${channelName}'.`);
+        this._logger.debug(`message ${messageId} accepted.`);
       } else if (rheaMessage.is_rejected(delivery.state)) {
-        this._logger.debug(`rejected message ${messageId} from '${channelName}'.`);
+        this._logger.debug(`message ${messageId} rejected.`);
       } else {
-        this._logger.debug(`released message ${messageId} from '${channelName}'.`);
+        this._logger.debug(`message ${messageId} released.`);
       }
 
-      this._logger.info(`processed message ${messageId} from '${channelName}'.`);
+      this._logger.info(`message ${messageId} processed.`);
     });
 
     this._logger.info(`reciever for channel '${channelName}' created: ${reciever.name}.`);
@@ -431,15 +433,15 @@ class ApplicationWorker {
 
     sender.on(SenderEvents.senderError, (ctx) => {
       const err = ctx.sender && ctx.sender.error;
-      this._logger.error(`sender '${sender.name}' for '${channelName}' error`, err);
+      this._logger.error(`sender '${sender.name}' error`, err);
     });
 
     sender.on(SenderEvents.senderOpen, () => {
-      this._logger.info(`sender '${sender.name}' for channel '${channelName}' opened.`);
+      this._logger.info(`sender '${sender.name}' opened.`);
     });
 
     sender.on(SenderEvents.senderClose, () => {
-      this._logger.info(`sender '${sender.name}' for channel '${channelName}' closed.`);
+      this._logger.info(`sender '${sender.name}' closed.`);
     });
 
     this._logger.info(`sender for channel '${channelName}' created: ${sender.name}.`);
