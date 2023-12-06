@@ -14,7 +14,7 @@ const {
   message: rheaMessage,
 } = rheaPromise;
 
-// hack 'rhea-promise https://github.com/amqp/rhea-promise/issues/109 -->
+// hack rhea-promise https://github.com/amqp/rhea-promise/issues/109 -->
 Object.defineProperty(rheaPromise.Receiver.prototype, 'address', {
   get() {
     return get(this, 'source.address', '');
@@ -401,7 +401,7 @@ class ApplicationWorker {
         ? message.message_id.toString('utf8') : message.message_id;
       message.message_id = messageId;
 
-      this._logger.info(`recieved message ${messageId} from '${channelName}'.`);
+      this._logger.info(`message ${messageId} recieved from '${channelName}'.`);
       this._logger.trace(`message ${messageId}:`, message);
 
       try {
