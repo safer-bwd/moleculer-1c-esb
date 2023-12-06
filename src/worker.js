@@ -138,29 +138,31 @@ class ApplicationWorker {
   }
 
   async send(channelName, payload, options = {}) {
-    if (!this._isConnectionOpen()) {
-      throw new Error('Connection is not opened!');
-    }
-
-    if (!this._isSessionOpen()) {
-      throw new Error('Session is not opened!');
-    }
-
-    const sender = this._getSender(channelName);
-    if (!sender) {
-      throw new Error(`Sender by channel '${channelName}' not found!`);
-    }
-
-    if (!sender.isOpen()) {
-      throw new Error(`Sender '${sender.name}' is not opened!`);
-    }
-
     const message = createMessage(payload, options);
 
     this._logger.debug(`message ${message.message_id} is sending to '${channelName}'...`);
+    this._logger.trace(`message ${message.message_id} payload:`, payload);
+    this._logger.trace(`message ${message.message_id}:`, message);
 
     let delivery;
     try {
+      if (!this._isConnectionOpen()) {
+        throw new Error('Connection is not opened!');
+      }
+
+      if (!this._isSessionOpen()) {
+        throw new Error('Session is not opened!');
+      }
+
+      const sender = this._getSender(channelName);
+      if (!sender) {
+        throw new Error(`Sender by channel '${channelName}' not found!`);
+      }
+
+      if (!sender.isOpen()) {
+        throw new Error(`Sender '${sender.name}' is not opened!`);
+      }
+
       delivery = await sender.send(message, {
         abortSignal: this._abortController ? this._abortController.signal : null,
         timeoutInSeconds: this._options.operationTimeoutInSeconds,
@@ -171,9 +173,6 @@ class ApplicationWorker {
     }
 
     this._logger.info(`message ${message.message_id} sent to '${channelName}'.`);
-
-    this._logger.trace(`message ${message.message_id}:`, message);
-    this._logger.trace(`message ${message.message_id} payload:`, payload);
 
     return { message, delivery };
   }
