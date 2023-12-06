@@ -218,12 +218,16 @@ class ApplicationWorker {
       timeMultiple,
       retry: (err, attempt) => {
         this._clear();
-        this._logger.debug(`open connection attempt ${attempt} failed.`);
-        return true;
+        if (this._state === States.Started) {
+          this._logger.debug(`open connection attempt ${attempt} failed.`);
+        }
+        return this._state === States.Started;
       }
     }).catch((err) => {
       this._clear();
-      this._logger.error('worker fatal error.', err);
+      if (this._state === States.Started) {
+        this._logger.error('worker fatal error.', err);
+      }
       throw err;
     });
   }
@@ -236,7 +240,6 @@ class ApplicationWorker {
     this._session = await this._createSession({ abortSignal });
     await this._createLinks({ abortSignal });
 
-    // reconnect
     let attempt = 0;
 
     this._connection.on(ConnectionEvents.disconnected, (ctx) => {
