@@ -240,6 +240,7 @@ class ApplicationWorker {
     this._session = await this._createSession({ abortSignal });
     await this._createLinks({ abortSignal });
 
+    // reconnect && reopen connection
     let attempt = 0;
 
     this._connection.on(ConnectionEvents.disconnected, (ctx) => {
@@ -495,8 +496,7 @@ class ApplicationWorker {
       .filter((link) => !link.isClosed());
 
     if (openedLinks.length === 0) {
-      this._recievers = new Map();
-      this._senders = new Map();
+      this._clearLinks();
       return;
     }
 
@@ -508,8 +508,7 @@ class ApplicationWorker {
       this._logger.error('failed to close links.', err);
     }
 
-    this._recievers = new Map();
-    this._senders = new Map();
+    this._clearLinks();
     this._logger.debug('links closed.');
   }
 
@@ -519,6 +518,7 @@ class ApplicationWorker {
     }
 
     if (this._session.isClosed()) {
+      this._session.removeAllListeners();
       this._session = null;
       return;
     }
@@ -530,6 +530,9 @@ class ApplicationWorker {
     } catch (err) {
       this._logger.error('failed to close session.', err);
     }
+
+    this._session.removeAllListeners();
+    this._session = null;
   }
 
   async _closeConnection() {
@@ -537,26 +540,46 @@ class ApplicationWorker {
       return;
     }
 
-    if (!this._connection.isOpen()) {
-      this._connection = null;
-      return;
+    if (this._connection.isOpen()) {
+      this._logger.debug('connection is closing...');
     }
-
-    this._logger.debug('connection is closing...');
 
     try {
       await this._connection.close();
     } catch (err) {
       this._logger.error('failed to close connection.', err);
     }
+
+    this._connection.removeAllListeners();
+    this._connection = null;
   }
 
-  async _clear() {
+  _clear() {
     this._abortController = null;
-    this._connection = null;
-    this._session = null;
-    this._recievers = new Map();
-    this._senders = new Map();
+
+    if (this._connection) {
+      this._connection.removeAllListeners();
+      this._connection = null;
+    }
+
+    if (this.session) {
+      this._session.removeAllListeners();
+      this._session = null;
+    }
+
+    this._clearLinks();
+  }
+
+  _clearLinks() {
+    if (this._recievers.size > 0) {
+      this._recievers.forEach((reciever) => reciever.removeAllListeners());
+      this._recievers = new Map();
+    }
+
+    if (this._senders.size > 0) {
+      this._senders.forEach((sender) => sender.removeAllListeners());
+      this._senders = new Map();
+    }
   }
 }
 
