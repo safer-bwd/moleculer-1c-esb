@@ -367,7 +367,6 @@ class ApplicationWorker {
 
     const { channels } = this._options;
     const { handler, amqp: amqpOpts = {} } = channels[channelName];
-    const [process, channel] = channelName.split('.');
 
     const recieverOpts = merge({}, get(this._options, 'amqp.reciever', {}), amqpOpts, {
       autoaccept: false,
@@ -377,7 +376,7 @@ class ApplicationWorker {
 
     let reciever;
     try {
-      reciever = await this._connection.createReceiver(process, channel, recieverOpts);
+      reciever = await this._connection.createReceiver(channelName, recieverOpts);
     } catch (err) {
       this._logger.error(`failed to create reciever for channel '${channelName}'.`, err);
       throw err;
@@ -441,7 +440,6 @@ class ApplicationWorker {
 
     const { channels } = this._options;
     const { amqp: amqpOpts } = channels[channelName];
-    const [process, channel] = channelName.split('.');
 
     const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), amqpOpts, options, {
       session: this._session,
@@ -449,7 +447,7 @@ class ApplicationWorker {
 
     let sender;
     try {
-      sender = await this._connection.createAwaitableSender(process, channel, senderOpts);
+      sender = await this._connection.createAwaitableSender(channelName, senderOpts);
     } catch (err) {
       this._logger.error(`failed to create sender for channel '${channelName}'.`, err);
       throw err;

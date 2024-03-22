@@ -33,7 +33,7 @@
     "moleculer": ">=0.14.0"
   },
   "dependencies": {
-    "1c-esb": "^0.4.2",
+    "1c-esb": "^0.5.0",
     "exponential-backoff": "^3.1.1",
     "lodash.get": "^4.4.2",
     "lodash.merge": "^4.6.2",
@@ -42,9 +42,9 @@
     "rhea-promise": "^3.0.1"
   },
   "devDependencies": {
-    "eslint": "^8.55.0",
+    "eslint": "^8.57.0",
     "eslint-config-airbnb": "^19.0.4",
-    "eslint-plugin-import": "^2.29.0",
+    "eslint-plugin-import": "^2.29.1",
     "moleculer": "^0.14.32"
   },
   "engines": {
