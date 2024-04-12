@@ -1,6 +1,5 @@
 const { ServiceBroker } = require('moleculer');
 const ESBMixin = require('../src');
-const { isString } = require('../src/utils');
 
 const RecieverService = {
   name: 'reciever',
@@ -10,7 +9,15 @@ const RecieverService = {
   ],
 
   settings: {
-    esb: { operationTimeoutInSeconds: 5 }
+    esb: {
+      operationTimeoutInSeconds: 5,
+      connection: {
+        amqp: { reconnect: { reconnect_limit: 5 } },
+      },
+      receiver: {
+        amqp: { credit_window: 10 },
+      },
+    }
   },
 
   applications: {
@@ -21,15 +28,47 @@ const RecieverService = {
       channels: {
         'Основной::ВыгрузкаЗаказов.to_trade': {
           direction: 'in',
-          handler(message, payload) {
-            const json = isString(payload) ? payload : payload.toString('utf8');
-            const order = JSON.parse(json);
-            this.logger.warn(`Upload order (message ${message.message_id}):`, order);
-          }
-        }
-      }
-    }
+          options: { amqp: { credit_window: 1 } },
+          handler(message) {
+            if (message.application_properties.ContentType !== 'application/json') {
+              throw new Error('Not supported content type!');
+            }
+
+            const payload = Buffer.isBuffer(message.body) ? message.body.toString('utf8') : message.body;
+            const order = JSON.parse(payload);
+            this.logger.warn('Upload order:', order);
+          },
+        },
+      },
+    },
   },
+
+  // OR:
+  // applications: [
+  //   {
+  //     // id: 'portal-trade', // if several 1C:ESB servers
+  //     url: 'http://localhost:9090/applications/portal-trade',
+  //     clientKey: '',
+  //     clientSecret: '',
+  //     channels: [
+  //       {
+  //         name: 'Основной::ВыгрузкаЗаказов.to_trade',
+  //         direction: 'in',
+  //         options: { amqp: { credit_window: 1 } },
+  //         handler(message) {
+  //           if (message.application_properties.ContentType !== 'application/json') {
+  //             throw new Error('Not supported content type!')
+  //           }
+  //           const payload = Buffer.isBuffer(message.body)
+  //             ? message.body.toString('utf8')
+  //             : message.body;
+  //           const order = JSON.parse(payload);
+  //           this.logger.warn(`Upload order:`, order);
+  //         },
+  //       },
+  //     ],
+  //   },
+  // ],
 };
 
 const broker = new ServiceBroker({

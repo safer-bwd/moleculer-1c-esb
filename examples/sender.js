@@ -9,7 +9,15 @@ const SenderService = {
   ],
 
   settings: {
-    esb: { operationTimeoutInSeconds: 5 }
+    esb: {
+      operationTimeoutInSeconds: 5,
+      connection: {
+        amqp: { reconnect: { reconnect_limit: 5 } },
+      },
+      sender: {
+        amqp: {},
+      },
+    }
   },
 
   applications: {
@@ -19,18 +27,40 @@ const SenderService = {
       clientSecret: '',
       channels: {
         'Основной::ВыгрузкаЗаказов.from_portal': {
-          direction: 'out'
+          direction: 'out',
+          options: { amqp: {} },
         }
       }
     }
   },
+
+  // OR:
+  // applications: [
+  //   {
+  //     // id: 'portal-trade', // if several 1C:ESB servers
+  //     url: 'http://localhost:9090/applications/portal-trade',
+  //     clientKey: '',
+  //     clientSecret: '',
+  //     channels: [
+  //       {
+  //         name: 'Основной::ВыгрузкаЗаказов.from_portal',
+  //         direction: 'out',
+  //         options: { amqp: {} },
+  //       }
+  //     ],
+  //   },
+  // ],
 
   actions: {
     async unloadOrder(ctx) {
       const { order } = ctx.params;
       const application = 'portal-trade';
       const channel = 'Основной::ВыгрузкаЗаказов.from_portal';
-      return this.sendToChannel(application, channel, order);
+      const options = {
+        application_properties: { ContentType: 'application/json' },
+      };
+
+      return this.sendToChannel(application, channel, order, options);
     }
   },
 };

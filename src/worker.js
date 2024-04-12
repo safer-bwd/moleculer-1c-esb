@@ -1,10 +1,13 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
-const { backOff } = require('exponential-backoff');
 const rheaPromise = require('rhea-promise');
-
 const {
-  get, merge, noop, pick, isString
+  get, isArray, isString, merge, pick, noop
 } = require('./utils');
+
+if (!global.AbortController) {
+  // eslint-disable-next-line global-require
+  global.AbortController = require('node-abort-controller').AbortController;
+}
 
 const {
   ReceiverEvents,
@@ -13,25 +16,6 @@ const {
   generate_uuid: uuid,
   message: rheaMessage,
 } = rheaPromise;
-
-// hack rhea-promise https://github.com/amqp/rhea-promise/issues/109 -->
-Object.defineProperty(rheaPromise.Receiver.prototype, 'address', {
-  get() {
-    return get(this, 'source.address', '');
-  }
-});
-
-Object.defineProperty(rheaPromise.AwaitableSender.prototype, 'address', {
-  get() {
-    return get(this, 'target.address', '');
-  }
-});
-// <--
-
-if (!global.AbortController) {
-  // eslint-disable-next-line global-require
-  global.AbortController = require('node-abort-controller').AbortController;
-}
 
 const createMessage = (payload, options = {}) => {
   const message = merge({}, options);
@@ -59,93 +43,118 @@ const createMessage = (payload, options = {}) => {
   return message;
 };
 
+const convertReceivedMessage = (message) => {
+  message.message_id = Buffer.isBuffer(message.message_id) ? message.message_id.toString('utf8') : message.message_id;
+  message.correlation_id = Buffer.isBuffer(message.correlation_id) ? message.correlation_id.toString('utf8') : message.correlation_id;
+  message.body = get(message.body, 'content', message.body);
+
+  return message;
+};
+
 const ChannelDirections = {
   In: 'in',
   Out: 'out'
 };
 
+const defaultOptions = {
+  operationTimeoutInSeconds: 60,
+
+  restart: {
+    startingDelay: 100,
+    maxDelay: 60 * 1000,
+    timeMultiple: 2,
+  },
+
+  connection: {
+    // https://github.com/amqp/rhea#connectoptions
+    // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
+    amqp: {
+      port: 6698,
+      max_frame_size: 1000000,
+      channel_max: 7000,
+      reconnect: {
+        reconnect_limit: 1,
+        initial_reconnect_delay: 100,
+        max_reconnect_delay: 60 * 1000,
+      },
+    }
+  },
+
+  sender: {
+    keepAlive: true,
+    // https://github.com/amqp/rhea#open_senderaddressoptions
+    amqp: {},
+  },
+
+  receiver: {
+    // https://github.com/amqp/rhea#open_receiveraddressoptions
+    amqp: {},
+  }
+};
+
 const States = {
   Starting: 'starting',
   Started: 'started',
-  Stopping: 'stopping',
+  Restarting: 'restarting',
   Stopped: 'stopped',
+  Stopping: 'stopping',
 };
 
-function Logger(worker) {
-  this._worker = worker;
-
-  const prefix = `1C:ESB '${this._worker.applicationId}':`;
-  const methods = ['info', 'warn', 'error', 'debug', 'trace'];
-  methods.forEach((method) => {
-    this[method] = this._worker.service.logger[method].bind(this, prefix);
-  });
-}
-
 class ApplicationWorker {
-  constructor(service, options) {
-    this._options = options;
-
-    this._state = States.Stopped;
-
-    // Moleculer service
+  constructor(service, options = {}) {
     this._service = service;
 
-    // 1C:ESB App
-    const { id, name } = this._options;
-    this._appId = id;
-    this._appName = name || id;
+    this._options = merge(defaultOptions, options);
+    if (isArray(this._options.channels)) {
+      this._options.channels = this._options.channels.reduce((acc, channel) => {
+        acc[channel.name] = channel;
+        return acc;
+      }, {});
+    }
 
-    // AMQP
+    this._applicationName = this._options.name || this._options.url.split('/').pop();
+    this._applicationID = this._options.id || this._applicationName;
+
+    this._state = States.Stopped;
     this._connection = null;
     this._session = null;
     this._senders = new Map();
-    this._recievers = new Map();
-
-    // Operation abort controller
+    this._receivers = new Map();
     this._abortController = null;
 
-    // Logger
-    this._logger = new Logger(this);
-    this._logger.debug('worker created.');
+    this._restartTimer = null;
+    this._restartDelay = 0;
+    this._restartAttempt = 0;
   }
 
-  get applicationId() {
-    return this._appId;
+  get applicationID() {
+    return this._applicationID;
   }
 
   get applicationName() {
-    return this._appName;
+    return this._applicationName;
   }
 
-  get service() {
-    return this._service;
-  }
-
-  start() {
+  async start() {
     if (this._state !== States.Stopped) {
       throw new Error('Worker is not stopped!');
     }
 
-    this._state = States.Starting;
-    this._logger.debug('worker is starting...');
-
-    this._tryConnect().catch(noop);
-
-    this._state = States.Started;
-    this._logger.info('worker started.');
-
-    return Promise.resolve(this);
+    await this._start();
   }
 
   async send(channelName, payload, options = {}) {
     const message = createMessage(payload, options);
 
-    this._logger.debug(`message ${message.message_id} is sending to '${channelName}'...`);
-    this._logger.trace(`message ${message.message_id} payload:`, payload);
-    this._logger.trace(`message ${message.message_id}:`, message);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' is sending to '${channelName}'...`);
 
     let delivery;
+    let sender;
     try {
+      if (this._state !== States.Started) {
+        throw new Error('Worker is not started!');
+      }
+
       if (!this._isConnectionOpen()) {
         throw new Error('Connection is not opened!');
       }
@@ -154,13 +163,16 @@ class ApplicationWorker {
         throw new Error('Session is not opened!');
       }
 
-      const sender = this._getSender(channelName);
-      if (!sender) {
-        throw new Error(`Sender by channel '${channelName}' not found!`);
-      }
-
-      if (!sender.isOpen()) {
-        throw new Error(`Sender '${sender.name}' is not opened!`);
+      if (this._options.sender.keepAlive) {
+        sender = this._senders.get(channelName);
+        if (!sender) {
+          throw new Error(`Sender for channel '${channelName}' not found!`);
+        }
+        if (!sender.isOpen()) {
+          throw new Error(`Sender '${sender.name}' is not opened!`);
+        }
+      } else {
+        sender = await this._createSender(channelName);
       }
 
       delivery = await sender.send(message, {
@@ -168,134 +180,135 @@ class ApplicationWorker {
         timeoutInSeconds: this._options.operationTimeoutInSeconds,
       });
     } catch (err) {
-      this._logger.error(`failed to send message ${message.message_id} to '${channelName}'.`, err);
+      this._service.logger.error(`1C:ESB [${this.applicationID}]: failed to send message '${message.message_id}' to '${channelName}'.`, err);
       throw err;
     }
 
-    this._logger.info(`message ${message.message_id} sent to '${channelName}'.`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' sent to '${channelName}'.`);
+
+    if (!this._options.sender.keepAlive) {
+      sender.close({ closeSession: false }).catch(noop).then(() => { sender = null; });
+    }
 
     return { message, delivery };
   }
 
-  stop() {
-    if (this._state === States.Stopped) {
-      return Promise.resolve(this);
-    }
-
-    this._state = States.Stopping;
-    this._logger.debug('worker is stopping...');
-
-    const onStop = () => {
-      this._state = States.Stopped;
-      this._logger.info('worker stopped.');
-    };
-
-    const onError = (err) => {
-      this._logger.error('worker error.', err);
-      this._clear();
-    };
-
-    return this._close()
-      .catch(onError)
-      .then(onStop);
+  async stop() {
+    await this._stop();
   }
 
-  //
+  async _start(attempt = 0) {
+    this._state = States.Starting;
 
-  async _tryConnect(options = {}) {
-    const { delayFirstAttempt = false } = options;
+    if (attempt) {
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: worker is restarting (attempt = ${attempt})...`);
+    } else {
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: worker is starting...`);
+    }
 
-    const {
-      numOfAttempts, startingDelay, maxDelay, timeMultiple
-    } = this._options.reconnect;
-
-    return backOff(() => this._connect(), {
-      numOfAttempts,
-      delayFirstAttempt,
-      startingDelay,
-      maxDelay,
-      timeMultiple,
-      retry: (err, attempt) => {
-        this._clear();
-        if (this._state === States.Started) {
-          this._logger.debug(`open connection attempt ${attempt} failed.`);
-        }
-        return this._state === States.Started;
+    const onDisconnect = (ctx) => {
+      if (!ctx.reconnecting && this._state === States.Started) {
+        this._stop().catch(noop).then(() => {
+          if (this._options.restart) {
+            this._scheduleRestart();
+          }
+        });
       }
-    }).catch((err) => {
-      this._clear();
-      if (this._state === States.Started) {
-        this._logger.error('worker fatal error.', err);
+    };
+
+    try {
+      await this._connect();
+      this._connection.on(ConnectionEvents.disconnected, onDisconnect);
+      this._restartAttempt = 0;
+      this._restartDelay = 0;
+      this._state = States.Started;
+      this._service.logger.info(`1C:ESB [${this.applicationID}]: worker started.`);
+    } catch (err) {
+      await this._disconnect().catch(noop);
+      this._service.logger.error(`1C:ESB [${this.applicationID}]: worker start error.`, err);
+      if (this._state === States.Starting && this._options.restart) {
+        this._scheduleRestart();
+      } else {
+        this._state = States.Stopped;
+        throw err;
       }
-      throw err;
-    });
+    }
   }
 
   async _connect() {
     this._abortController = new AbortController();
-    const { signal: abortSignal } = this._abortController;
-
-    this._connection = await this._openConnection({ abortSignal });
-    this._session = await this._createSession({ abortSignal });
-    await this._createLinks({ abortSignal });
-
-    // reconnect && reopen connection
-    let attempt = 0;
-
-    this._connection.on(ConnectionEvents.disconnected, (ctx) => {
-      if (ctx.reconnecting) { // reconnect (rhea promise logic)
-        if (attempt === 0) {
-          this._logger.debug(`connection '${this._connection.id}' reconnect started.`);
-        } else {
-          this._logger.debug(`connection '${this._connection.id}' reconnect attempt ${attempt} failed.`);
-        }
-        attempt += 1;
-      } else if (this._connection) { // reopen connection (custom logic)
-        if (attempt > 0) {
-          this._logger.debug(`connection '${this._connection.id}' reconnect canceled.`);
-        }
-        this._close()
-          .catch(() => this._clear())
-          .then(() => this._tryConnect({ delayFirstAttempt: true }))
-          .catch(noop);
-      }
-    });
-
-    this._connection.on(ConnectionEvents.connectionOpen, () => {
-      attempt = 0;
-    });
+    this._connection = await this._openConnection();
+    this._session = await this._createSession();
+    await this._createLinks();
   }
 
-  async _openConnection(options = {}) {
-    this._logger.debug('connection is opening...');
+  _scheduleRestart() {
+    this._state = States.Restarting;
 
-    const connOpts = merge(pick(this._options, [
+    const {
+      startingDelay = 100,
+      maxDelay = 60 * 1000,
+      timeMultiple = 2,
+    } = this._options.restart;
+
+    if (!this._restartDelay) {
+      this._restartDelay = startingDelay;
+    } else if (this._restartDelay < maxDelay) {
+      this._restartDelay *= timeMultiple;
+      if (this._restartDelay > maxDelay) {
+        this._restartDelay = maxDelay;
+      }
+    }
+
+    this._restartTimer = setTimeout(() => {
+      this._restartAttempt += 1;
+      this._start(this._restartAttempt).catch(noop);
+    }, this._restartDelay);
+
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: scheduled restart worker in ${this._restartDelay} ms.`);
+  }
+
+  async _openConnection() {
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection is opening...`);
+
+    const connectionOpts = merge(pick(this._options, [
       'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds'
     ]), {
-      amqp: get(this._options, 'amqp.connection', {}),
+      amqp: this._options.connection.amqp,
     });
 
-    const connection = new Connection(connOpts);
+    const connection = new Connection(connectionOpts);
+
     connection
-      .on(ConnectionEvents.connectionOpen, () => {
-        this._logger.info(`connection '${connection.id}' opened.`);
-      })
       .on(ConnectionEvents.connectionError, (ctx) => {
-        this._logger.error('connection error.', ctx.error);
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection error.`, ctx.error);
+      })
+      .on(ConnectionEvents.connectionOpen, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection opened: ${connection.id}.`);
       })
       .on(ConnectionEvents.protocolError, (ctx) => {
-        this._logger.error('connection protocol error.', ctx.error);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: connection protocol error.`, ctx.error);
+      })
+      .on(ConnectionEvents.settled, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: connection settled.`);
       })
       .on(ConnectionEvents.disconnected, (ctx) => {
         if (connection.id) {
-          this._logger.info(`connection '${connection.id}' disconnected.`, ctx.error);
+          this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection '${connection.id}' disconnected.`);
+          if (ctx.reconnecting) {
+            this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection '${connection.id}' reconnecting...`);
+          } else {
+            this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection '${connection.id}' reconnection aborted.`);
+          }
         }
       })
       .on(ConnectionEvents.connectionClose, () => {
-        this._logger.info(`connection '${connection.id}' closed.`);
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection '${connection.id}' closed.`);
       });
 
-    await connection.open(options);
+    await connection.open({
+      abortSignal: this._abortController ? this._abortController.signal : null
+    });
 
     return connection;
   }
@@ -304,278 +317,278 @@ class ApplicationWorker {
     return !!(this._connection && this._connection.isOpen());
   }
 
-  _isSessionOpen() {
-    return !!(this._session && this._session.isOpen());
-  }
-
-  async _createSession(options = {}) {
-    this._logger.debug('session is creating...');
+  async _createSession() {
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: session is creating...`);
 
     let session;
     try {
-      session = await this._connection.createSession(options);
+      session = await this._connection.createSession({
+        abortSignal: this._abortController ? this._abortController.signal : null
+      });
     } catch (err) {
-      this._logger.error('failed to create session.', err);
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create session.`, err);
       throw err;
     }
 
-    session.on(SessionEvents.sessionError, (ctx) => {
-      const err = ctx.session && ctx.session.error;
-      this._logger.error(`session '${session.id}' error.`, err);
-    });
+    session
+      .on(SessionEvents.sessionError, (ctx) => {
+        const err = ctx.session && ctx.session.error;
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: session '${session.id}' error.`, err);
+      })
+      .on(SessionEvents.sessionOpen, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: session '${session.id}' opened.`);
+      })
+      .on(SessionEvents.settled, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: session '${session.id}' settled.`);
+      })
+      .on(SessionEvents.sessionClose, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: session '${session.id}' closed.`);
+      });
 
-    session.on(SessionEvents.sessionOpen, () => {
-      this._logger.info(`session '${session.id}' opened.`);
-    });
-
-    session.on(SessionEvents.sessionClose, () => {
-      this._logger.info(`session '${session.id}' closed.`);
-    });
-
-    this._logger.info(`session created: ${session.id}`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: session created: ${session.id}.`);
 
     return session;
   }
 
-  async _createLinks(options = {}) {
-    this._logger.debug('links are creating...');
+  _isSessionOpen() {
+    return !!(this._session && this._session.isOpen());
+  }
+
+  async _createLinks() {
+    this._receivers = new Map();
+    this._senders = new Map();
 
     const { channels } = this._options;
     const channelNames = Object.keys(channels);
 
-    try {
-      await Promise.all(channelNames.map(async (name) => {
-        const direction = channels[name].direction.toLowerCase();
+    if (channelNames.length > 0) {
+      await Promise.all(channelNames.map(async (channelName) => {
+        const direction = channels[channelName].direction.toLowerCase();
         if (direction === ChannelDirections.In) {
-          const reciever = await this._createReciever(name, options);
-          this._recievers.set(name, reciever);
-        } else {
-          const sender = await this._createSender(name, options);
-          this._senders.set(name, sender);
+          const receiver = await this._createReceiver(channelName);
+          this._receivers.set(channelName, receiver);
+        } else if (direction === ChannelDirections.Out) {
+          const senderOpts = merge({}, this._options.sender, channels[channelName].options);
+          if (senderOpts.keepAlive) {
+            const sender = await this._createSender(channelName);
+            this._senders.set(channelName, sender);
+          }
         }
       }));
-    } catch (err) {
-      this._logger.error('failed to create links.', err);
-      throw err;
     }
-
-    this._logger.debug('links created.');
   }
 
-  async _createReciever(channelName, options = {}) {
-    this._logger.debug(`reciever for channel '${channelName}' is creating...`);
+  async _createReceiver(channelName) {
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for channel '${channelName}' is creating...`);
 
     const { channels } = this._options;
-    const { handler, amqp: amqpOpts = {} } = channels[channelName];
 
-    const recieverOpts = merge({}, get(this._options, 'amqp.reciever', {}), amqpOpts, {
+    const { handler, options: channelOpts } = channels[channelName];
+    const receiverOpts = merge({}, this._options.receiver, channelOpts);
+    const receiverRheaOpts = merge({}, receiverOpts.amqp, {
+      session: this._session,
+      abortSignal: this._abortController ? this._abortController.signal : null,
       autoaccept: false,
-    }, options, {
-      session: this._session
     });
 
-    let reciever;
+    let receiver;
     try {
-      reciever = await this._connection.createReceiver(channelName, recieverOpts);
+      receiver = await this._connection.createReceiver(channelName, receiverRheaOpts);
     } catch (err) {
-      this._logger.error(`failed to create reciever for channel '${channelName}'.`, err);
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create receiver for '${channelName}'.`, err);
       throw err;
     }
 
-    reciever.on(ReceiverEvents.receiverError, (ctx) => {
-      const err = ctx.receiver && ctx.receiver.error;
-      this._logger.error(`reciever '${reciever.name}' error`, err);
-    });
+    receiver
+      .on(ReceiverEvents.receiverError, (ctx) => {
+        const err = ctx.receiver && ctx.receiver.error;
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) error`, err);
+      })
+      .on(ReceiverEvents.receiverOpen, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) opened.`);
+      })
+      .on(ReceiverEvents.receiverDrained, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) drained.`);
+      })
+      .on(ReceiverEvents.receiverFlow, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) flow.`);
+      })
+      .on(ReceiverEvents.settled, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) settled.`);
+      })
+      .on(ReceiverEvents.receiverClose, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) closed.`);
+      });
 
-    reciever.on(ReceiverEvents.receiverOpen, () => {
-      this._logger.info(`reciever '${reciever.name}' opened.`);
-    });
+    // receive and process message
+    receiver.on(ReceiverEvents.message, async (ctx) => {
+      const { delivery, message: receivedMsg } = ctx;
 
-    reciever.on(ReceiverEvents.receiverClose, () => {
-      this._logger.info(`reciever '${reciever.name}' closed.`);
-    });
+      const message = convertReceivedMessage(receivedMsg);
+      const { message_id: messageId } = message;
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
 
-    reciever.on(ReceiverEvents.message, async (ctx) => {
-      const { delivery, message } = ctx;
-
-      const payload = get(message.body, 'content', message.body);
-      const messageId = Buffer.isBuffer(message.message_id)
-        ? message.message_id.toString('utf8') : message.message_id;
-      message.message_id = messageId;
-
-      this._logger.info(`message ${messageId} recieved from '${channelName}'.`);
-      this._logger.trace(`message ${messageId}:`, message);
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);
 
       try {
-        this._logger.debug(`message ${messageId} is processing...`);
-        await handler.bind(this._service)(message, payload, delivery);
+        await handler.bind(this._service)(message, delivery);
         if (!rheaMessage.is_accepted(delivery.state)
           && !rheaMessage.is_rejected(delivery.state)
           && !rheaMessage.is_released(delivery.state)) {
           delivery.accept();
         }
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') processed.`);
       } catch (err) {
+        this._service.logger.error(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') process error.`, err);
         delivery.release({ delivery_failed: true });
-        this._logger.error(`failed to process message ${messageId}.`, err);
       }
 
+      let deliveryState;
       if (rheaMessage.is_accepted(delivery.state)) {
-        this._logger.debug(`message ${messageId} accepted.`);
+        deliveryState = 'accepted';
       } else if (rheaMessage.is_rejected(delivery.state)) {
-        this._logger.debug(`message ${messageId} rejected.`);
+        deliveryState = 'rejected';
       } else {
-        this._logger.debug(`message ${messageId} released.`);
+        deliveryState = 'released';
       }
 
-      this._logger.info(`message ${messageId} processed.`);
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') delivery state: ${deliveryState}.`);
     });
 
-    this._logger.info(`reciever for channel '${channelName}' created: ${reciever.name}.`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' created: ${receiver.name}.`);
 
-    return reciever;
+    return receiver;
   }
 
-  async _createSender(channelName, options = {}) {
-    this._logger.debug(`sender for channel '${channelName}' is creating...`);
+  async _createSender(channelName) {
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for channel '${channelName}' is creating...`);
 
     const { channels } = this._options;
-    const { amqp: amqpOpts } = channels[channelName];
-
-    const senderOpts = merge({}, get(this._options, 'amqp.sender', {}), amqpOpts, options, {
+    const senderOpts = merge({}, this._options.sender, channels[channelName].options);
+    const senderRheaOpts = merge({}, senderOpts.amqp, {
       session: this._session,
+      abortSignal: this._abortController ? this._abortController.signal : null,
     });
 
     let sender;
     try {
-      sender = await this._connection.createAwaitableSender(channelName, senderOpts);
+      sender = await this._connection.createAwaitableSender(channelName, senderRheaOpts);
     } catch (err) {
-      this._logger.error(`failed to create sender for channel '${channelName}'.`, err);
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create sender for '${channelName}'.`, err);
       throw err;
     }
 
-    sender.on(SenderEvents.senderError, (ctx) => {
-      const err = ctx.sender && ctx.sender.error;
-      this._logger.error(`sender '${sender.name}' error`, err);
-    });
+    sender
+      .on(SenderEvents.senderError, (ctx) => {
+        const err = ctx.sender && ctx.sender.error;
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) error`, err);
+      })
+      .on(SenderEvents.senderOpen, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) opened.`);
+      })
+      .on(SenderEvents.senderDraining, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name})' draining.`);
+      })
+      .on(SenderEvents.senderFlow, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) flow.`);
+      })
+      .on(SenderEvents.sendable, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) sendable.`);
+      })
+      .on(SenderEvents.accepted, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) accepted.`);
+      })
+      .on(SenderEvents.modified, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) modified.`);
+      })
+      .on(SenderEvents.rejected, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) rejected.`);
+      })
+      .on(SenderEvents.released, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) released.`);
+      })
+      .on(SenderEvents.senderClose, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) closed.`);
+      });
 
-    sender.on(SenderEvents.senderOpen, () => {
-      this._logger.info(`sender '${sender.name}' opened.`);
-    });
-
-    sender.on(SenderEvents.senderClose, () => {
-      this._logger.info(`sender '${sender.name}' closed.`);
-    });
-
-    this._logger.info(`sender for channel '${channelName}' created: ${sender.name}.`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' created: ${sender.name}.`);
 
     return sender;
   }
 
-  _getSender(channelName) {
-    return this._senders.get(channelName);
+  async _stop() {
+    this._state = States.Stopping;
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: worker is stopping...`);
+
+    if (this._restartTimer) {
+      clearTimeout(this._restartTimer);
+      this._restartTimer = null;
+    }
+
+    await this._disconnect().catch(noop);
+
+    this._restartAttempt = 0;
+    this._restartDelay = 0;
+
+    this._state = States.Stopped;
+    this._service.logger.info(`1C:ESB [${this.applicationID}]: worker stopped.`);
   }
 
-  async _close() {
+  _disconnect() {
     if (this._abortController) {
       this._abortController.abort();
       this._abortController = null;
     }
 
-    await this._closeLinks();
-    await this._closeSession();
-    await this._closeConnection();
-  }
+    return new Promise((resolve) => {
+      process.nextTick(async () => {
+        try {
+          await this._closeLinks();
+        } catch (err) {
+          this._senders = new Map();
+          this._receivers = new Map();
+        }
 
-  async _closeLinks() {
-    const openedLinks = []
-      .concat(Array.from(this._senders.values()))
-      .concat(Array.from(this._recievers.values()))
-      .filter((link) => !link.isClosed());
+        try {
+          await this._closeSession();
+        } catch (err) {
+          this._session = null;
+        }
 
-    if (openedLinks.length === 0) {
-      this._clearLinks();
-      return;
-    }
+        try {
+          await this._closeConnection();
+        } catch (err) {
+          this._connection = null;
+        }
 
-    this._logger.debug('links are closing...');
-
-    try {
-      await Promise.all(openedLinks.map((link) => link.close({ closeSession: false })));
-    } catch (err) {
-      this._logger.error('failed to close links.', err);
-    }
-
-    this._clearLinks();
-    this._logger.debug('links closed.');
-  }
-
-  async _closeSession() {
-    if (!this._session) {
-      return;
-    }
-
-    if (this._session.isClosed()) {
-      this._session.removeAllListeners();
-      this._session = null;
-      return;
-    }
-
-    this._logger.debug('session is closing...');
-
-    try {
-      await this._session.close();
-    } catch (err) {
-      this._logger.error('failed to close session.', err);
-    }
-
-    this._session.removeAllListeners();
-    this._session = null;
+        resolve();
+      });
+    });
   }
 
   async _closeConnection() {
-    if (!this._connection) {
-      return;
-    }
-
-    if (this._connection.isOpen()) {
-      this._logger.debug('connection is closing...');
-    }
-
-    try {
-      await this._connection.close();
-    } catch (err) {
-      this._logger.error('failed to close connection.', err);
-    }
-
-    this._connection.removeAllListeners();
-    this._connection = null;
-  }
-
-  _clear() {
-    this._abortController = null;
-
     if (this._connection) {
-      this._connection.removeAllListeners();
+      await this._connection.close();
       this._connection = null;
     }
-
-    if (this.session) {
-      this._session.removeAllListeners();
-      this._session = null;
-    }
-
-    this._clearLinks();
   }
 
-  _clearLinks() {
-    if (this._recievers.size > 0) {
-      this._recievers.forEach((reciever) => reciever.removeAllListeners());
-      this._recievers = new Map();
+  async _closeSession() {
+    if (this._session) {
+      await this._session.close();
+      this._session = null;
     }
+  }
 
-    if (this._senders.size > 0) {
-      this._senders.forEach((sender) => sender.removeAllListeners());
+  async _closeLinks() {
+    const links = []
+      .concat(Array.from(this._senders.values()))
+      .concat(Array.from(this._receivers.values()));
+
+    if (links.length > 0) {
+      await Promise.all(links.map((link) => link.close({ closeSession: false })));
       this._senders = new Map();
+      this._receivers = new Map();
     }
   }
 }

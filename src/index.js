@@ -1,43 +1,46 @@
-const { merge } = require('./utils');
 const ApplicationWorker = require('./worker');
+const { isArray, merge } = require('./utils');
 
 module.exports = {
   settings: {
     esb: {
-      reconnect: {
-        numOfAttempts: Infinity,
+      operationTimeoutInSeconds: 60,
+
+      restart: {
         startingDelay: 100,
         maxDelay: 60 * 1000,
         timeMultiple: 2,
       },
 
-      operationTimeoutInSeconds: 60,
-
-      // https://github.com/amqp/rhea
-      amqp: {
+      connection: {
         // https://github.com/amqp/rhea#connectoptions
         // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
-        connection: {
+        amqp: {
           port: 6698,
           max_frame_size: 1000000,
           channel_max: 7000,
           reconnect: {
-            reconnect_limit: 10,
+            reconnect_limit: 1,
             initial_reconnect_delay: 100,
             max_reconnect_delay: 60 * 1000,
           },
-        },
+        }
+      },
 
+      sender: {
+        keepAlive: true,
         // https://github.com/amqp/rhea#open_senderaddressoptions
-        sender: {},
+        amqp: {},
+      },
 
+      receiver: {
         // https://github.com/amqp/rhea#open_receiveraddressoptions
-        receiver: {}
+        amqp: {},
       },
     },
   },
 
-  applications: {},
+  applications: {}, // object or array
 
   actions: {
     'send-to-channel': {
@@ -60,10 +63,10 @@ module.exports = {
   },
 
   methods: {
-    async sendToChannel(appId, channelName, payload, options = {}) {
-      const worker = this.$workers.get(appId);
+    async sendToChannel(applicationID, channelName, payload, options = {}) {
+      const worker = this.$workers.get(applicationID);
       if (!worker) {
-        throw new Error(`Worker for 1C:ESB application with id '${appId}' not found!`);
+        throw new Error(`Worker for 1C:ESB application with id '${applicationID}' not found!`);
       }
 
       const res = await worker.send(channelName, payload, options);
@@ -72,25 +75,29 @@ module.exports = {
     },
   },
 
+  merged(schema) {
+    if (!isArray(schema.applications)) {
+      const ids = Object.keys(schema.applications);
+      schema.applications = Object.values(schema.applications).map((v, i) => {
+        v.id = ids[i];
+        return v;
+      });
+    }
+  },
+
   created() {
     this.$workers = new Map();
 
-    const appIds = Object.keys(this.schema.applications);
-    if (appIds.length === 0) {
+    if (this.schema.applications.length === 0) {
       return;
     }
 
     this.logger.debug('1C:ESB workers are creating...');
 
-    appIds.forEach((id) => {
-      const options = merge({}, this.settings.esb, this.schema.applications[id], { id });
-      if (!options.channels || Object.keys(options.channels).length === 0) {
-        this.logger.debug(`Worker for 1C:ESB application with id '${id}' has not been created: channel list is empty.`);
-        return;
-      }
-
+    this.schema.applications.forEach((opts) => {
+      const options = merge({}, this.settings.esb, opts);
       const worker = new ApplicationWorker(this, options);
-      this.$workers.set(id, worker);
+      this.$workers.set(worker.applicationID, worker);
     });
 
     this.logger.info('1C:ESB workers created.');
