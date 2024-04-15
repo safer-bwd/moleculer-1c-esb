@@ -13,6 +13,7 @@ module.exports = {
       },
 
       connection: {
+        singleSession: true,
         // https://github.com/amqp/rhea#connectoptions
         // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
         amqp: {
