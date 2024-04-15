@@ -73,6 +73,7 @@ const defaultOptions = {
   },
 
   connection: {
+    singleSession: true,
     // https://github.com/amqp/rhea#connectoptions
     // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
     amqp: {
@@ -246,8 +247,10 @@ class ApplicationWorker {
     this._abortController = new AbortController();
     this._connection = await this._openConnection();
 
-    this._abortController = new AbortController();
-    this._session = await this._createSession();
+    if (this._options.connection.singleSession) {
+      this._abortController = new AbortController();
+      this._session = await this._createSession();
+    }
 
     this._abortController = new AbortController();
     this._abortController.signal.eventEmitter.setMaxListeners(this._options.maxListeners);
@@ -400,7 +403,7 @@ class ApplicationWorker {
     const { handler, options: channelOpts } = channels[channelName];
     const receiverOpts = merge({}, this._options.receiver, channelOpts);
     const receiverRheaOpts = merge({}, receiverOpts.amqp, {
-      session: this._session,
+      session: this._options.connection.singleSession ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
       autoaccept: false,
     });
@@ -480,7 +483,7 @@ class ApplicationWorker {
     const { channels } = this._options;
     const senderOpts = merge({}, this._options.sender, channels[channelName].options);
     const senderRheaOpts = merge({}, senderOpts.amqp, {
-      session: this._session,
+      session: this._options.connection.singleSession ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
     });
 
@@ -563,10 +566,12 @@ class ApplicationWorker {
           this._receivers = new Map();
         }
 
-        try {
-          await this._closeSession();
-        } catch (err) {
-          this._session = null;
+        if (this._options.connection.singleSession) {
+          try {
+            await this._closeSession();
+          } catch (err) {
+            this._session = null;
+          }
         }
 
         try {
@@ -600,7 +605,10 @@ class ApplicationWorker {
       .concat(Array.from(this._receivers.values()));
 
     if (links.length > 0) {
-      await Promise.all(links.map((link) => link.close({ closeSession: false })));
+      await Promise.all(links.map((link) => link.close({
+        closeSession: !this._options.connection.singleSession,
+      })));
+
       this._senders = new Map();
       this._receivers = new Map();
     }
