@@ -64,6 +64,7 @@ const ChannelDirections = {
 
 const defaultOptions = {
   operationTimeoutInSeconds: 60,
+  maxListeners: 100,
 
   restart: {
     startingDelay: 100,
@@ -244,8 +245,15 @@ class ApplicationWorker {
   async _connect() {
     this._abortController = new AbortController();
     this._connection = await this._openConnection();
+
+    this._abortController = new AbortController();
     this._session = await this._createSession();
+
+    this._abortController = new AbortController();
+    this._abortController.signal.eventEmitter.setMaxListeners(this._options.maxListeners);
     await this._createLinks();
+
+    this._abortController = null;
   }
 
   _scheduleRestart() {
@@ -278,7 +286,7 @@ class ApplicationWorker {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection is opening...`);
 
     const connectionOpts = merge(pick(this._options, [
-      'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds'
+      'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds', 'maxListeners'
     ]), {
       amqp: this._options.connection.amqp,
     });
