@@ -152,7 +152,7 @@ class ApplicationWorker {
   }
 
   async send(channelName, payload, params = {}, options = {}) {
-    const message = createMessage(payload, options);
+    const message = createMessage(payload, params);
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' is sending to '${channelName}'...`);
 
