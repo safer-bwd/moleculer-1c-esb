@@ -17,7 +17,6 @@ const {
   message: rheaMessage,
 } = rheaPromise;
 
-
 const createMessage = (payload, params = {}) => {
   const message = merge({}, params);
   message.application_properties = message.application_properties || {};
@@ -230,7 +229,6 @@ class ApplicationWorker {
       this._connection.on(ConnectionEvents.disconnected, onDisconnect);
       this._restartAttempt = 0;
       this._restartDelay = 0;
-      this._abortController
       this._state = States.Started;
       this._service.logger.info(`1C:ESB [${this.applicationID}]: worker started.`);
     } catch (err) {
@@ -246,12 +244,6 @@ class ApplicationWorker {
   }
 
   async _connect() {
-    this._abortController = new AbortController();
-    const { signal: abortSignal } = this._abortController;
-    if (this._options.operationsConcurrency > abortSignal.eventEmitter.getMaxListeners()) {
-      abortSignal.eventEmitter.setMaxListeners(this._options.operationsConcurrency);
-    }
-
     this._connection = await this._openConnection();
 
     if (this._options.connection.singleSession) {
@@ -259,8 +251,6 @@ class ApplicationWorker {
     }
 
     await this._createLinks();
-
-    this._abortController = null;
   }
 
   _scheduleRestart() {
@@ -327,9 +317,9 @@ class ApplicationWorker {
         this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection '${connection.id}' closed.`);
       });
 
-    await connection.open({
-      abortSignal: this._abortController ? this._abortController.signal : null
-    });
+    this._abortController = new AbortController();
+    await connection.open({ abortSignal: this._abortController.signal });
+    this._abortController = null;
 
     return connection;
   }
@@ -341,15 +331,17 @@ class ApplicationWorker {
   async _createSession() {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: session is creating...`);
 
+    this._abortController = new AbortController();
+
     let session;
     try {
-      session = await this._connection.createSession({
-        abortSignal: this._abortController ? this._abortController.signal : null
-      });
+      session = await this._connection.createSession({ abortSignal: this._abortController.signal });
     } catch (err) {
       this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create session.`, err);
       throw err;
     }
+
+    this._abortController = null;
 
     session
       .on(SessionEvents.sessionError, (ctx) => {
@@ -384,6 +376,10 @@ class ApplicationWorker {
 
     if (channelNames.length > 0) {
       const concurrency = this._options.operationsConcurrency;
+
+      this._abortController = new AbortController();
+      this._abortController.signal.eventEmitter.setMaxListeners(concurrency);
+
       await asyncPool(concurrency, channelNames, async (channelName) => {
         const direction = channels[channelName].direction.toLowerCase();
         if (direction === ChannelDirections.In) {
@@ -397,6 +393,8 @@ class ApplicationWorker {
           }
         }
       });
+
+      this._abortController = null;
     }
   }
 
@@ -408,7 +406,7 @@ class ApplicationWorker {
     const { handler, options: channelOpts } = channels[channelName];
     const receiverOpts = merge({}, this._options.receiver, channelOpts);
     const receiverRheaOpts = merge({}, receiverOpts.amqp, {
-      session: this._options.connection.singleSession ? this._session : null,
+      session: this._session ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
       autoaccept: false,
     });
@@ -488,7 +486,7 @@ class ApplicationWorker {
     const { channels } = this._options;
     const senderOpts = merge({}, this._options.sender, channels[channelName].options);
     const senderRheaOpts = merge({}, senderOpts.amqp, {
-      session: this._options.connection.singleSession ? this._session : null,
+      session: this._session ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
     });
 
