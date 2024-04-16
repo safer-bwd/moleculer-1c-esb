@@ -1,10 +1,11 @@
 const ApplicationWorker = require('./worker');
-const { isArray, merge } = require('./utils');
+const { asyncPool, isArray, merge } = require('./utils');
 
 module.exports = {
   settings: {
     esb: {
       operationTimeoutInSeconds: 60,
+      operationsConcurrency: 5,
 
       restart: {
         startingDelay: 100,
@@ -112,7 +113,9 @@ module.exports = {
     this.logger.debug('1C:ESB workers are starting...');
 
     const workers = Array.from(this.$workers.values());
-    await Promise.all(workers.map((worker) => worker.start()));
+
+    const concurrency = this.settings.esb.operationsConcurrency;
+    await asyncPool(concurrency, workers, (worker) => worker.start());
 
     this.logger.info('1C:ESB workers started.');
   },
@@ -125,7 +128,9 @@ module.exports = {
     this.logger.debug('1C:ESB workers are stopping...');
 
     const workers = Array.from(this.$workers.values());
-    await Promise.all(workers.map((worker) => worker.stop()));
+
+    const concurrency = this.settings.esb.operationsConcurrency;
+    await asyncPool(concurrency, workers, (worker) => worker.stop());
 
     this.logger.info('1C:ESB workers stopped.');
   },

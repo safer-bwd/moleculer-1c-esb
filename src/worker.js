@@ -1,7 +1,7 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
 const rheaPromise = require('rhea-promise');
 const {
-  get, isArray, isString, merge, pick, noop
+  asyncPool, get, isArray, isString, merge, pick, noop
 } = require('./utils');
 
 if (!global.AbortController) {
@@ -64,6 +64,7 @@ const ChannelDirections = {
 
 const defaultOptions = {
   operationTimeoutInSeconds: 60,
+  operationsConcurrency: 5,
   maxListeners: 100,
 
   restart: {
@@ -112,7 +113,7 @@ class ApplicationWorker {
   constructor(service, options = {}) {
     this._service = service;
 
-    this._options = merge(defaultOptions, options);  
+    this._options = merge(defaultOptions, options);
     if (isArray(this._options.channels)) {
       this._options.channels = this._options.channels.reduce((acc, channel) => {
         acc[channel.name] = channel;
@@ -379,7 +380,8 @@ class ApplicationWorker {
     const channelNames = Object.keys(channels);
 
     if (channelNames.length > 0) {
-      await Promise.all(channelNames.map(async (channelName) => {
+      const concurrency = this._options.operationsConcurrency;
+      await asyncPool(concurrency, channelNames, async (channelName) => {
         const direction = channels[channelName].direction.toLowerCase();
         if (direction === ChannelDirections.In) {
           const receiver = await this._createReceiver(channelName);
@@ -391,7 +393,7 @@ class ApplicationWorker {
             this._senders.set(channelName, sender);
           }
         }
-      }));
+      });
     }
   }
 
@@ -605,13 +607,14 @@ class ApplicationWorker {
       .concat(Array.from(this._receivers.values()));
 
     if (links.length > 0) {
-      await Promise.all(links.map((link) => link.close({
+      const concurrency = this._options.operationsConcurrency;
+      await asyncPool(concurrency, links, (link) => link.close({
         closeSession: !this._options.connection.singleSession,
-      })));
-
-      this._senders = new Map();
-      this._receivers = new Map();
+      }));
     }
+
+    this._senders = new Map();
+    this._receivers = new Map();
   }
 }
 
