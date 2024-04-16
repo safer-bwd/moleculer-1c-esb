@@ -17,8 +17,9 @@ const {
   message: rheaMessage,
 } = rheaPromise;
 
-const createMessage = (payload, options = {}) => {
-  const message = merge({}, options);
+
+const createMessage = (payload, params = {}) => {
+  const message = merge({}, params);
   message.application_properties = message.application_properties || {};
 
   if (!message.message_id) {
@@ -65,7 +66,6 @@ const ChannelDirections = {
 const defaultOptions = {
   operationTimeoutInSeconds: 60,
   operationsConcurrency: 5,
-  maxListeners: 100,
 
   restart: {
     startingDelay: 100,
@@ -152,7 +152,7 @@ class ApplicationWorker {
     await this._start();
   }
 
-  async send(channelName, payload, options = {}) {
+  async send(channelName, payload, params = {}, options = {}) {
     const message = createMessage(payload, options);
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' is sending to '${channelName}'...`);
@@ -168,7 +168,7 @@ class ApplicationWorker {
         throw new Error('Connection is not opened!');
       }
 
-      if (!this._isSessionOpen()) {
+      if (this._options.connection.singleSession && !this._isSessionOpen()) {
         throw new Error('Session is not opened!');
       }
 
@@ -185,8 +185,8 @@ class ApplicationWorker {
       }
 
       delivery = await sender.send(message, {
-        abortSignal: this._abortController ? this._abortController.signal : null,
         timeoutInSeconds: this._options.operationTimeoutInSeconds,
+        ...options,
       });
     } catch (err) {
       this._service.logger.error(`1C:ESB [${this.applicationID}]: failed to send message '${message.message_id}' to '${channelName}'.`, err);
@@ -230,6 +230,7 @@ class ApplicationWorker {
       this._connection.on(ConnectionEvents.disconnected, onDisconnect);
       this._restartAttempt = 0;
       this._restartDelay = 0;
+      this._abortController
       this._state = States.Started;
       this._service.logger.info(`1C:ESB [${this.applicationID}]: worker started.`);
     } catch (err) {
@@ -246,15 +247,17 @@ class ApplicationWorker {
 
   async _connect() {
     this._abortController = new AbortController();
+    const { signal: abortSignal } = this._abortController;
+    if (this._options.operationsConcurrency > abortSignal.eventEmitter.getMaxListeners()) {
+      abortSignal.eventEmitter.setMaxListeners(this._options.operationsConcurrency);
+    }
+
     this._connection = await this._openConnection();
 
     if (this._options.connection.singleSession) {
-      this._abortController = new AbortController();
       this._session = await this._createSession();
     }
 
-    this._abortController = new AbortController();
-    this._abortController.signal.eventEmitter.setMaxListeners(this._options.maxListeners);
     await this._createLinks();
 
     this._abortController = null;
@@ -290,7 +293,7 @@ class ApplicationWorker {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection is opening...`);
 
     const connectionOpts = merge(pick(this._options, [
-      'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds', 'maxListeners'
+      'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds'
     ]), {
       amqp: this._options.connection.amqp,
     });
