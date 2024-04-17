@@ -251,6 +251,7 @@ class ApplicationWorker {
     }
 
     await this._createLinks();
+    this._startReceivers();
   }
 
   _scheduleRestart() {
@@ -402,9 +403,7 @@ class ApplicationWorker {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for channel '${channelName}' is creating...`);
 
     const { channels } = this._options;
-
-    const { handler, options: channelOpts } = channels[channelName];
-    const receiverOpts = merge({}, this._options.receiver, channelOpts);
+    const receiverOpts = merge({}, this._options.receiver, channels[channelName].options);
     const receiverRheaOpts = merge({}, receiverOpts.amqp, {
       session: this._session ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
@@ -439,41 +438,6 @@ class ApplicationWorker {
       .on(ReceiverEvents.receiverClose, () => {
         this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) closed.`);
       });
-
-    // receive and process message
-    receiver.on(ReceiverEvents.message, async (ctx) => {
-      const { delivery, message: receivedMsg } = ctx;
-
-      const message = convertReceivedMessage(receivedMsg);
-      const { message_id: messageId } = message;
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
-
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);
-
-      try {
-        await handler.bind(this._service)(message, delivery);
-        if (!rheaMessage.is_accepted(delivery.state)
-          && !rheaMessage.is_rejected(delivery.state)
-          && !rheaMessage.is_released(delivery.state)) {
-          delivery.accept();
-        }
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') processed.`);
-      } catch (err) {
-        this._service.logger.error(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') process error.`, err);
-        delivery.release({ delivery_failed: true });
-      }
-
-      let deliveryState;
-      if (rheaMessage.is_accepted(delivery.state)) {
-        deliveryState = 'accepted';
-      } else if (rheaMessage.is_rejected(delivery.state)) {
-        deliveryState = 'rejected';
-      } else {
-        deliveryState = 'released';
-      }
-
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') delivery state: ${deliveryState}.`);
-    });
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' created: ${receiver.name}.`);
 
@@ -534,6 +498,58 @@ class ApplicationWorker {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' created: ${sender.name}.`);
 
     return sender;
+  }
+
+  _startReceivers() {
+    const { channels } = this._options;
+    const channelNames = Object.keys(channels)
+      .filter((channelName) => channels[channelName].direction === ChannelDirections.In);
+
+    if (channelNames.length > 0) {
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: receivers are starting...`);
+
+      channelNames.forEach((channelName) => {
+        const receiver = this._receivers.get(channelName);
+        receiver.on(ReceiverEvents.message, this._receiverHandler.bind(this, channelName));
+      });
+
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: receivers started.`);
+    }
+  }
+
+  async _receiverHandler(channelName, ctx) {
+    const { delivery, message: receivedMsg } = ctx;
+
+    const message = convertReceivedMessage(receivedMsg);
+    const { message_id: messageId } = message;
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
+
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);
+
+    const { handler } = this._options.channels[channelName];
+    try {
+      await handler.bind(this._service)(message, delivery);
+      if (!rheaMessage.is_accepted(delivery.state)
+        && !rheaMessage.is_rejected(delivery.state)
+        && !rheaMessage.is_released(delivery.state)) {
+        delivery.accept();
+      }
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') processed.`);
+    } catch (err) {
+      this._service.logger.error(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') process error.`, err);
+      delivery.release({ delivery_failed: true });
+    }
+
+    let deliveryState;
+    if (rheaMessage.is_accepted(delivery.state)) {
+      deliveryState = 'accepted';
+    } else if (rheaMessage.is_rejected(delivery.state)) {
+      deliveryState = 'rejected';
+    } else {
+      deliveryState = 'released';
+    }
+
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') delivery state: ${deliveryState}.`);
   }
 
   async _stop() {
