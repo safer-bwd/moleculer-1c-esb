@@ -10,4 +10,4 @@ npm install moleculer-1c-esb --save
 
 ## Usage
 
-See [Examples](https://github.com/safer-bwd/moleculer-1c-esb/tree/eb2b63e1da672e5af3ab930400ff8704ecd0abc0/examples)
+See [Examples](https://github.com/safer-bwd/moleculer-1c-esb/tree/main/examples)
