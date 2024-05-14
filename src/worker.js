@@ -406,6 +406,7 @@ class ApplicationWorker {
       session: this._session ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
       autoaccept: false,
+      credit_window: 0
     });
 
     let receiver;
@@ -509,6 +510,12 @@ class ApplicationWorker {
       channelNames.forEach((channelName) => {
         const receiver = this._receivers.get(channelName);
         receiver.on(ReceiverEvents.message, this._receiverHandler.bind(this, channelName));
+
+        const opts = merge({ amqp: { credit_window: 1000 } }, 
+          this._options.receiver, channels[channelName].options);
+        
+        receiver.setCreditWindow(opts.amqp.credit_window);
+        receiver.addCredit(opts.amqp.credit_window);
       });
 
       this._service.logger.debug(`1C:ESB [${this.applicationID}]: receivers started.`);
