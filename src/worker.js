@@ -248,8 +248,7 @@ class ApplicationWorker {
       this._session = await this._createSession();
     }
 
-    await this._createLinks();
-    this._startReceivers();
+    return this._createLinks();
   }
 
   _scheduleRestart() {
@@ -379,18 +378,28 @@ class ApplicationWorker {
       this._abortController = new AbortController();
       this._abortController.signal.eventEmitter.setMaxListeners(concurrency);
 
-      await asyncPool(concurrency, channelNames, async (channelName) => {
-        const direction = channels[channelName].direction.toLowerCase();
-        if (direction === ChannelDirections.In) {
-          const receiver = await this._createReceiver(channelName);
-          this._receivers.set(channelName, receiver);
-        } else if (direction === ChannelDirections.Out) {
+      const channels = {
+        [ChannelDirections.In]: [],
+        [ChannelDirections.Out]: []
+      }
+
+      channelNames.forEach((name) => {
+        channels[channels[name].direction.toLowerCase()].push(name);
+      });
+
+      // Start senders, they could be needed on receive
+      await asyncPool(concurrency, channels[ChannelDirections.Out], async (channelName) => {
           const senderOpts = merge({}, this._options.sender, channels[channelName].options);
           if (senderOpts.keepAlive) {
             const sender = await this._createSender(channelName);
             this._senders.set(channelName, sender);
-          }
-        }
+          }        
+      });
+
+      // Then start receivers
+      await asyncPool(concurrency, channels[ChannelDirections.In], async (channelName) => {
+        const receiver = await this._createReceiver(channelName);
+        this._receivers.set(channelName, receiver);
       });
 
       this._abortController = null;
@@ -406,6 +415,12 @@ class ApplicationWorker {
       session: this._session ? this._session : null,
       abortSignal: this._abortController ? this._abortController.signal : null,
       autoaccept: false,
+      // https://github.com/amqp/rhea-promise/blob/6ff5c9cf715c7e017ee76ceaefa172764cbec476/lib/session.ts#L264
+      onMessage: this._receiverHandler.bind(this, channelName),
+      onError: (ctx) => {
+        const err = ctx.receiver && ctx.receiver.error;
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) error`, err);
+      }
     });
 
     let receiver;
@@ -417,10 +432,6 @@ class ApplicationWorker {
     }
 
     receiver
-      .on(ReceiverEvents.receiverError, (ctx) => {
-        const err = ctx.receiver && ctx.receiver.error;
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) error`, err);
-      })
       .on(ReceiverEvents.receiverOpen, () => {
         this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) opened.`);
       })
@@ -496,23 +507,6 @@ class ApplicationWorker {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' created: ${sender.name}.`);
 
     return sender;
-  }
-
-  _startReceivers() {
-    const { channels } = this._options;
-    const channelNames = Object.keys(channels)
-      .filter((channelName) => channels[channelName].direction === ChannelDirections.In);
-
-    if (channelNames.length > 0) {
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: receivers are starting...`);
-
-      channelNames.forEach((channelName) => {
-        const receiver = this._receivers.get(channelName);
-        receiver.on(ReceiverEvents.message, this._receiverHandler.bind(this, channelName));
-      });
-
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: receivers started.`);
-    }
   }
 
   async _receiverHandler(channelName, ctx) {
