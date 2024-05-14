@@ -15,6 +15,7 @@ const RecieverService = {
         amqp: { reconnect: { reconnect_limit: 5 } },
       },
       receiver: {
+        convertMessage: true,
         amqp: { credit_window: 10 },
       },
     }

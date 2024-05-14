@@ -1,7 +1,7 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
 const rheaPromise = require('rhea-promise');
 const {
-  asyncPool, get, isArray, isString, merge, pick, noop
+  asyncPool, cloneDeep, get, isArray, isString, merge, pick, noop
 } = require('./utils');
 
 if (!global.AbortController) {
@@ -43,18 +43,15 @@ const createMessage = (payload, params = {}) => {
   return message;
 };
 
+// TODO: wrong algorithm
+const idToString = (id) => (Buffer.isBuffer(id) ? id.toString('utf8') : String(id));
+
 const convertReceivedMessage = (message) => {
-  if (Buffer.isBuffer(message.message_id)) {
-    message.message_id = message.message_id.toString('utf8');
-  }
-
-  if (Buffer.isBuffer(message.correlation_id)) {
-    message.correlation_id = message.correlation_id.toString('utf8');
-  }
-
-  message.body = get(message.body, 'content', message.body);
-
-  return message;
+  const converted = cloneDeep(message);
+  converted.message_id = idToString(converted.message_id);
+  converted.correlation_id = idToString(converted.correlation_id);
+  converted.body = get(converted.body, 'content', converted.body);
+  return converted;
 };
 
 const ChannelDirections = {
@@ -95,6 +92,7 @@ const defaultOptions = {
   },
 
   receiver: {
+    convertMessage: true,
     // https://github.com/amqp/rhea#open_receiveraddressoptions
     amqp: {},
   }
@@ -520,8 +518,9 @@ class ApplicationWorker {
   async _receiverHandler(channelName, ctx) {
     const { delivery, message: receivedMsg } = ctx;
 
-    const message = convertReceivedMessage(receivedMsg);
-    const { message_id: messageId } = message;
+    const message = this._options.receiver.convertMessage
+      ? convertReceivedMessage(receivedMsg) : receivedMsg;
+    const messageId = idToString(message.message_id);
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);

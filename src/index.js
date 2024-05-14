@@ -36,6 +36,7 @@ module.exports = {
       },
 
       receiver: {
+        convertMessage: true,
         // https://github.com/amqp/rhea#open_receiveraddressoptions
         amqp: {},
       },
