@@ -371,35 +371,38 @@ class ApplicationWorker {
 
     const { channels } = this._options;
     const channelNames = Object.keys(channels);
-
     if (channelNames.length > 0) {
-      const concurrency = this._options.operationsConcurrency;
+      const senderChannelNames = [];
+      const receiverChannelNames = [];
+      channelNames.forEach((channelName) => {
+        if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
+          receiverChannelNames.push(channelName);
+        } else {
+          senderChannelNames.push(channelName);
+        }
+      });
 
+      const concurrency = this._options.operationsConcurrency;
       this._abortController = new AbortController();
       this._abortController.signal.eventEmitter.setMaxListeners(concurrency);
 
-      const channels = {
-        [ChannelDirections.In]: [],
-        [ChannelDirections.Out]: []
-      }
-
-      channelNames.forEach((name) => {
-        channels[channels[name].direction.toLowerCase()].push(name);
-      });
-
       // First start senders because they could be needed on receive
-      await asyncPool(concurrency, channels[ChannelDirections.Out], async (channelName) => {
+      if (senderChannelNames.length > 0) {
+        await asyncPool(concurrency, senderChannelNames, async (channelName) => {
           const senderOpts = merge({}, this._options.sender, channels[channelName].options);
           if (senderOpts.keepAlive) {
             const sender = await this._createSender(channelName);
             this._senders.set(channelName, sender);
-          }        
-      });
+          }
+        });
+      }
 
-      await asyncPool(concurrency, channels[ChannelDirections.In], async (channelName) => {
-        const receiver = await this._createReceiver(channelName);
-        this._receivers.set(channelName, receiver);
-      });
+      if (receiverChannelNames.length > 0) {
+        await asyncPool(concurrency, receiverChannelNames, async (channelName) => {
+          const receiver = await this._createReceiver(channelName);
+          this._receivers.set(channelName, receiver);
+        });
+      }
 
       this._abortController = null;
     }
@@ -619,7 +622,6 @@ class ApplicationWorker {
       await asyncPool(concurrency, receivers, (receiver) => receiver.close({
         closeSession: !this._options.connection.singleSession,
       }));
-      
     }
 
     if (this._senders.size > 0) {
