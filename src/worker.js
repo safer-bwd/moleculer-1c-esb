@@ -387,7 +387,7 @@ class ApplicationWorker {
         channels[channels[name].direction.toLowerCase()].push(name);
       });
 
-      // Start senders, they could be needed on receive
+      // First start senders because they could be needed on receive
       await asyncPool(concurrency, channels[ChannelDirections.Out], async (channelName) => {
           const senderOpts = merge({}, this._options.sender, channels[channelName].options);
           if (senderOpts.keepAlive) {
@@ -396,7 +396,6 @@ class ApplicationWorker {
           }        
       });
 
-      // Then start receivers
       await asyncPool(concurrency, channels[ChannelDirections.In], async (channelName) => {
         const receiver = await this._createReceiver(channelName);
         this._receivers.set(channelName, receiver);
@@ -612,19 +611,26 @@ class ApplicationWorker {
   }
 
   async _closeLinks() {
-    const links = []
-      .concat(Array.from(this._senders.values()))
-      .concat(Array.from(this._receivers.values()));
+    const concurrency = this._options.operationsConcurrency;
 
-    if (links.length > 0) {
-      const concurrency = this._options.operationsConcurrency;
-      await asyncPool(concurrency, links, (link) => link.close({
+    // First close receivers because they could use senders
+    if (this._receivers.size > 0) {
+      const receivers = Array.from(this._receivers.values());
+      await asyncPool(concurrency, receivers, (receiver) => receiver.close({
+        closeSession: !this._options.connection.singleSession,
+      }));
+      
+    }
+
+    if (this._senders.size > 0) {
+      const senders = Array.from(this._senders.values());
+      await asyncPool(concurrency, senders, (sender) => sender.close({
         closeSession: !this._options.connection.singleSession,
       }));
     }
 
-    this._senders = new Map();
     this._receivers = new Map();
+    this._senders = new Map();
   }
 }
 
