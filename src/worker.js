@@ -420,8 +420,9 @@ class ApplicationWorker {
       // https://github.com/amqp/rhea-promise/blob/6ff5c9cf715c7e017ee76ceaefa172764cbec476/lib/session.ts#L264
       onMessage: this._receiverHandler.bind(this, channelName),
       onError: (ctx) => {
-        const err = ctx.receiver && ctx.receiver.error;
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) error`, err);
+        if (ctx.receiver) {
+          this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${ctx.receiver.name}) error`, ctx.receiver.error);
+        }
       }
     });
 
