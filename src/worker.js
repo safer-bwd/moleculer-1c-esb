@@ -376,41 +376,43 @@ class ApplicationWorker {
 
     const { channels } = this._options;
     const channelNames = Object.keys(channels);
-    if (channelNames.length > 0) {
-      const senderChannelNames = [];
-      const receiverChannelNames = [];
-      channelNames.forEach((channelName) => {
-        if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
-          receiverChannelNames.push(channelName);
-        } else {
-          senderChannelNames.push(channelName);
+    if (channelNames.length === 0) {
+      return;
+    }
+
+    const senderChannelNames = [];
+    const receiverChannelNames = [];
+    channelNames.forEach((channelName) => {
+      if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
+        receiverChannelNames.push(channelName);
+      } else {
+        senderChannelNames.push(channelName);
+      }
+    });
+
+    const concurrency = this._options.operationsConcurrency;
+    this._abortController = new AbortController();
+    this._abortController.signal.eventEmitter.setMaxListeners(concurrency);
+
+    // First start senders because they could be needed on receive
+    if (senderChannelNames.length > 0) {
+      await asyncPool(concurrency, senderChannelNames, async (channelName) => {
+        const senderOpts = merge({}, this._options.sender, channels[channelName].options);
+        if (senderOpts.keepAlive) {
+          const sender = await this._createSender(channelName);
+          this._senders.set(channelName, sender);
         }
       });
-
-      const concurrency = this._options.operationsConcurrency;
-      this._abortController = new AbortController();
-      this._abortController.signal.eventEmitter.setMaxListeners(concurrency);
-
-      // First start senders because they could be needed on receive
-      if (senderChannelNames.length > 0) {
-        await asyncPool(concurrency, senderChannelNames, async (channelName) => {
-          const senderOpts = merge({}, this._options.sender, channels[channelName].options);
-          if (senderOpts.keepAlive) {
-            const sender = await this._createSender(channelName);
-            this._senders.set(channelName, sender);
-          }
-        });
-      }
-
-      if (receiverChannelNames.length > 0) {
-        await asyncPool(concurrency, receiverChannelNames, async (channelName) => {
-          const receiver = await this._createReceiver(channelName);
-          this._receivers.set(channelName, receiver);
-        });
-      }
-
-      this._abortController = null;
     }
+
+    if (receiverChannelNames.length > 0) {
+      await asyncPool(concurrency, receiverChannelNames, async (channelName) => {
+        const receiver = await this._createReceiver(channelName);
+        this._receivers.set(channelName, receiver);
+      });
+    }
+
+    this._abortController = null;
   }
 
   async _createReceiver(channelName) {
