@@ -1,5 +1,4 @@
 const cloneDeep = require('lodash.clonedeep');
-const get = require('lodash.get');
 const merge = require('lodash.merge');
 const pick = require('lodash.pick');
 const tinyAsyncPool = require('tiny-async-pool');
@@ -24,7 +23,6 @@ const noop = () => {};
 module.exports = {
   asyncPool,
   cloneDeep,
-  get,
   isArray,
   isString,
   merge,

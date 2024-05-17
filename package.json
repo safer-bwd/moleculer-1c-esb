@@ -35,7 +35,6 @@
   "dependencies": {
     "1c-esb": "^0.6.1",
     "lodash.clonedeep": "^4.5.0",
-    "lodash.get": "^4.4.2",
     "lodash.merge": "^4.6.2",
     "lodash.pick": "^4.4.0",
     "node-abort-controller": "^3.1.1",

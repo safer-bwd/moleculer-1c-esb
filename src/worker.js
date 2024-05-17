@@ -1,7 +1,7 @@
 const { Connection, ConnectionEvents } = require('1c-esb');
 const rheaPromise = require('rhea-promise');
 const {
-  asyncPool, cloneDeep, get, isArray, isString, merge, pick, noop
+  asyncPool, cloneDeep, isArray, isString, merge, pick, noop
 } = require('./utils');
 
 if (!global.AbortController) {
@@ -30,17 +30,24 @@ const createMessage = (payload, params = {}) => {
   }
 
   let contentType;
+  let contentCharset;
   if (Buffer.isBuffer(payload)) {
     message.body = rheaMessage.data_section(payload);
   } else if (isString(payload)) {
     message.body = rheaMessage.data_section(Buffer.from(payload, 'utf8'));
+    contentCharset = 'utf8';
   } else {
     message.body = rheaMessage.data_section(Buffer.from(JSON.stringify(payload), 'utf8'));
     contentType = 'application/json';
+    contentCharset = 'utf8';
   }
 
   if (!message.application_properties.ContentType && contentType) {
     message.application_properties.ContentType = contentType;
+  }
+
+  if (!message.application_properties.ContentCharset && contentCharset) {
+    message.application_properties.ContentCharset = contentCharset;
   }
 
   return message;
@@ -48,12 +55,23 @@ const createMessage = (payload, params = {}) => {
 
 const id2string = (id) => (Buffer.isBuffer(id) ? uuid2string(id) : String(id));
 
+const isDataSection = (obj) => typeof obj === 'object' && obj.constructor.name === 'Section'
+  && obj.typecode === 0x75 && !obj.multiple;
+
 const convertReceivedMessage = (message) => {
   const converted = cloneDeep(message);
-  converted.message_id = id2string(converted.message_id);
-  converted.correlation_id = id2string(converted.correlation_id);
-  // TODO: wrong algorithm
-  converted.body = get(converted.body, 'content', converted.body);
+
+  if (converted.message_id) {
+    converted.message_id = id2string(converted.message_id);
+  }
+
+  if (converted.correlation_id) {
+    converted.correlation_id = id2string(converted.correlation_id);
+  }
+
+  if (isDataSection(converted.body)) {
+    converted.body = converted.body.content;
+  }
 
   return converted;
 };
