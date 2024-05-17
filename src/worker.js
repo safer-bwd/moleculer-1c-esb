@@ -10,11 +10,13 @@ if (!global.AbortController) {
 }
 
 const {
+  message: rheaMessage,
   ReceiverEvents,
   SenderEvents,
   SessionEvents,
-  generate_uuid: uuid,
-  message: rheaMessage,
+  generate_uuid: uuid4,
+  string_to_uuid: string2uuid,
+  uuid_to_string: uuid2string,
 } = rheaPromise;
 
 const createMessage = (payload, params = {}) => {
@@ -22,8 +24,9 @@ const createMessage = (payload, params = {}) => {
   message.application_properties = message.application_properties || {};
 
   if (!message.message_id) {
-    message.message_id = uuid();
-    message.application_properties.integ_message_id = message.message_id;
+    const messageId = uuid4();
+    message.message_id = string2uuid(messageId);
+    message.application_properties.integ_message_id = messageId;
   }
 
   let contentType;
@@ -43,14 +46,15 @@ const createMessage = (payload, params = {}) => {
   return message;
 };
 
-// TODO: wrong algorithm
-const idToString = (id) => (Buffer.isBuffer(id) ? id.toString('utf8') : String(id));
+const id2string = (id) => (Buffer.isBuffer(id) ? uuid2string(id) : String(id));
 
 const convertReceivedMessage = (message) => {
   const converted = cloneDeep(message);
-  converted.message_id = idToString(converted.message_id);
-  converted.correlation_id = idToString(converted.correlation_id);
+  converted.message_id = id2string(converted.message_id);
+  converted.correlation_id = id2string(converted.correlation_id);
+  // TODO: wrong algorithm
   converted.body = get(converted.body, 'content', converted.body);
+
   return converted;
 };
 
@@ -151,8 +155,9 @@ class ApplicationWorker {
 
   async send(channelName, payload, params = {}, options = {}) {
     const message = createMessage(payload, params);
+    const messageId = id2string(message.message_id);
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' is sending to '${channelName}'...`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' is sending to '${channelName}'...`);
 
     let delivery;
     let sender;
@@ -186,11 +191,11 @@ class ApplicationWorker {
         ...options,
       });
     } catch (err) {
-      this._service.logger.error(`1C:ESB [${this.applicationID}]: failed to send message '${message.message_id}' to '${channelName}'.`, err);
+      this._service.logger.error(`1C:ESB [${this.applicationID}]: failed to send message '${messageId}' to '${channelName}'.`, err);
       throw err;
     }
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${message.message_id}' sent to '${channelName}'.`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' sent to '${channelName}'.`);
 
     if (!this._options.sender.keepAlive) {
       sender.close({ closeSession: false }).catch(noop).then(() => { sender = null; });
@@ -517,7 +522,8 @@ class ApplicationWorker {
 
     const message = this._options.receiver.convertMessage
       ? convertReceivedMessage(receivedMsg) : receivedMsg;
-    const messageId = idToString(message.message_id);
+
+    const messageId = id2string(message.message_id);
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);
