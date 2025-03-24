@@ -1,6 +1,6 @@
 {
   "name": "moleculer-1c-esb",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Task mixin for 1C:ESB",
   "main": "src/index.js",
   "scripts": {
@@ -33,7 +33,7 @@
     "moleculer": ">=0.14.0"
   },
   "dependencies": {
-    "1c-esb": "^0.6.1",
+    "1c-esb": "^0.7.0",
     "lodash.clonedeep": "^4.5.0",
     "lodash.merge": "^4.6.2",
     "lodash.pick": "^4.4.0",
