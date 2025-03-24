@@ -175,7 +175,9 @@ class ApplicationWorker {
     const message = createMessage(payload, params);
     const messageId = id2string(message.message_id);
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' is sending to '${channelName}'...`);
+    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]`;
+    this._service.logger.debug(`${logPrefix}: message '${messageId}' is sending...`);
+    this._service.logger.trace(`${logPrefix}: message '${messageId}' payload:`, payload);
 
     let delivery;
     let sender;
@@ -209,11 +211,11 @@ class ApplicationWorker {
         ...options,
       });
     } catch (err) {
-      this._service.logger.error(`1C:ESB [${this.applicationID}]: failed to send message '${messageId}' to '${channelName}'.`, err);
+      this._service.logger.error(`${logPrefix}: sending message '${messageId}' failed:`, err);
       throw err;
     }
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' sent to '${channelName}'.`);
+    this._service.logger.debug(`${logPrefix}: message '${messageId}' sent.`);
 
     if (!this._options.sender.keepAlive) {
       sender.close({ closeSession: false }).catch(noop).then(() => { sender = null; });
@@ -546,9 +548,9 @@ class ApplicationWorker {
       ? convertReceivedMessage(receivedMsg) : receivedMsg;
 
     const messageId = id2string(message.message_id);
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' recieved from '${channelName}'.`);
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') is processing...`);
+    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]`;
+    this._service.logger.debug(`${logPrefix}: message '${messageId}' recieved.`);
 
     const { handler } = this._options.channels[channelName];
     try {
@@ -558,9 +560,9 @@ class ApplicationWorker {
         && !rheaMessage.is_released(delivery.state)) {
         delivery.accept();
       }
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') processed.`);
+      this._service.logger.debug(`${logPrefix}: message '${messageId}' processed.`);
     } catch (err) {
-      this._service.logger.error(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') process error.`, err);
+      this._service.logger.error(`${logPrefix}: message '${messageId}' processing failed:`, err);
       delivery.release({ delivery_failed: true });
     }
 
@@ -573,7 +575,7 @@ class ApplicationWorker {
       deliveryState = 'released';
     }
 
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: message '${messageId}' (from '${channelName}') delivery state: ${deliveryState}.`);
+    this._service.logger.debug(`${logPrefix}: message '${messageId}' delivery state: ${deliveryState}.`);
   }
 
   async _stop() {
