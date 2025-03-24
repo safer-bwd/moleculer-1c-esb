@@ -132,7 +132,7 @@ class ApplicationWorker {
   constructor(service, options = {}) {
     this._service = service;
 
-    this._options = merge(defaultOptions, options);
+    this._options = merge({}, defaultOptions, options);
     if (isArray(this._options.channels)) {
       this._options.channels = this._options.channels.reduce((acc, channel) => {
         acc[channel.name] = channel;
