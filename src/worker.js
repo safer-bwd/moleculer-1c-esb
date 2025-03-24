@@ -403,8 +403,9 @@ class ApplicationWorker {
     const senderChannelNames = [];
     const receiverChannelNames = [];
     channelNames.forEach((channelName) => {
-      if (!channels.disabled) {
-        if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
+      const channel = channels[channelName];
+      if (!channel.disabled) {
+        if (channel.direction.toLowerCase() === ChannelDirections.In) {
           receiverChannelNames.push(channelName);
         } else {
           senderChannelNames.push(channelName);

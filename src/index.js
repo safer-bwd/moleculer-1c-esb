@@ -95,14 +95,20 @@ module.exports = {
       return;
     }
 
+    const enabledApplications = this.schema.applications
+      .filter((app) => !app.disabled)
+      .filter((app) => app.channels.filter((ch) => !ch.disabled).length > 0);
+
+    if (enabledApplications.length === 0) {
+      return;
+    }
+
     this.logger.debug('1C:ESB workers are creating...');
 
-    this.schema.applications.forEach((opts) => {
-      if (!opts.disabled) {
-        const options = merge({}, this.settings.esb, opts);
-        const worker = new ApplicationWorker(this, options);
-        this.$workers.set(worker.applicationID, worker);
-      }
+    enabledApplications.forEach((opts) => {
+      const options = merge({}, this.settings.esb, opts);
+      const worker = new ApplicationWorker(this, options);
+      this.$workers.set(worker.applicationID, worker);
     });
 
     this.logger.info('1C:ESB workers created.');
