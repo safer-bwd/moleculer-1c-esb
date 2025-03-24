@@ -401,10 +401,12 @@ class ApplicationWorker {
     const senderChannelNames = [];
     const receiverChannelNames = [];
     channelNames.forEach((channelName) => {
-      if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
-        receiverChannelNames.push(channelName);
-      } else {
-        senderChannelNames.push(channelName);
+      if (!channels.disabled) {
+        if (channels[channelName].direction.toLowerCase() === ChannelDirections.In) {
+          receiverChannelNames.push(channelName);
+        } else {
+          senderChannelNames.push(channelName);
+        }
       }
     });
 

@@ -98,9 +98,11 @@ module.exports = {
     this.logger.debug('1C:ESB workers are creating...');
 
     this.schema.applications.forEach((opts) => {
-      const options = merge({}, this.settings.esb, opts);
-      const worker = new ApplicationWorker(this, options);
-      this.$workers.set(worker.applicationID, worker);
+      if (!opts.disabled) {
+        const options = merge({}, this.settings.esb, opts);
+        const worker = new ApplicationWorker(this, options);
+        this.$workers.set(worker.applicationID, worker);
+      }
     });
 
     this.logger.info('1C:ESB workers created.');
