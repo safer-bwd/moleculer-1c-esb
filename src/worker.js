@@ -439,7 +439,7 @@ class ApplicationWorker {
   }
 
   async _createReceiver(channelName) {
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for channel '${channelName}' is creating...`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' is creating...`);
 
     const { channels } = this._options;
     const receiverOpts = merge({}, this._options.receiver, channels[channelName].options);
@@ -487,7 +487,7 @@ class ApplicationWorker {
   }
 
   async _createSender(channelName) {
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for channel '${channelName}' is creating...`);
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' is creating...`);
 
     const { channels } = this._options;
     const senderOpts = merge({}, this._options.sender, channels[channelName].options);
