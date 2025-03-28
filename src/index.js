@@ -4,7 +4,6 @@ const { asyncPool, isArray, merge } = require('./utils');
 module.exports = {
   settings: {
     esb: {
-      operationTimeoutInSeconds: 60,
       operationsConcurrency: 5,
 
       restart: {
@@ -14,7 +13,13 @@ module.exports = {
       },
 
       connection: {
+        // Use a single session for all links
         singleSession: true,
+
+        // Connection operations timeout
+        // https://github.com/safer-bwd/node-1c-esb
+        operationTimeoutInSeconds: 30,
+
         // https://github.com/amqp/rhea#connectoptions
         // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
         amqp: {
@@ -22,7 +27,7 @@ module.exports = {
           max_frame_size: 1000000,
           channel_max: 7000,
           reconnect: {
-            reconnect_limit: 1,
+            reconnect_limit: 5,
             initial_reconnect_delay: 100,
             max_reconnect_delay: 60 * 1000,
           },
@@ -31,12 +36,24 @@ module.exports = {
 
       sender: {
         keepAlive: true,
+
+        // Message sending timeout
+        timeoutInSeconds: 30,
+
         // https://github.com/amqp/rhea#open_senderaddressoptions
         amqp: {},
       },
 
       receiver: {
+        // Convert message before call handlers (consumers)
         convertMessage: true,
+
+        // Maximum number of parallel message processings
+        parallel: 0, // If parallel === 0 default rhea.js behavior is used
+
+        // Start receiving delay (ms)
+        startDelay: 0,
+
         // https://github.com/amqp/rhea#open_receiveraddressoptions
         amqp: {},
       },

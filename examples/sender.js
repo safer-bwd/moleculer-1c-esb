@@ -10,11 +10,13 @@ const SenderService = {
 
   settings: {
     esb: {
-      operationTimeoutInSeconds: 5,
       connection: {
+        operationTimeoutInSeconds: 5,
         amqp: { reconnect: { reconnect_limit: 5 } },
       },
       sender: {
+        keepAlive: true,
+        timeoutInSeconds: 5,
         amqp: {},
       },
     }

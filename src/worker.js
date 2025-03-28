@@ -53,7 +53,12 @@ const createMessage = (payload, params = {}) => {
   return message;
 };
 
-const id2string = (id) => (Buffer.isBuffer(id) ? uuid2string(id) : String(id));
+const id2string = (id) => {
+  if (isString(id)) return id;
+  if (Buffer.isBuffer(id)) return uuid2string(id);
+
+  return String(id);
+};
 
 const isDataSection = (obj) => typeof obj === 'object' && obj.constructor.name === 'Section'
   && obj.typecode === 0x75 && !obj.multiple;
@@ -82,7 +87,6 @@ const ChannelDirections = {
 };
 
 const defaultOptions = {
-  operationTimeoutInSeconds: 60,
   operationsConcurrency: 5,
 
   restart: {
@@ -93,6 +97,8 @@ const defaultOptions = {
 
   connection: {
     singleSession: true,
+    operationTimeoutInSeconds: 30,
+
     // https://github.com/amqp/rhea#connectoptions
     // https://its.1c.ru/db/esbdoc3/content/20006/hdoc
     amqp: {
@@ -100,7 +106,7 @@ const defaultOptions = {
       max_frame_size: 1000000,
       channel_max: 7000,
       reconnect: {
-        reconnect_limit: 1,
+        reconnect_limit: 5,
         initial_reconnect_delay: 100,
         max_reconnect_delay: 60 * 1000,
       },
@@ -109,12 +115,17 @@ const defaultOptions = {
 
   sender: {
     keepAlive: true,
+    timeoutInSeconds: 30,
+
     // https://github.com/amqp/rhea#open_senderaddressoptions
     amqp: {},
   },
 
   receiver: {
     convertMessage: true,
+    parallel: 0,
+    startDelay: 0,
+
     // https://github.com/amqp/rhea#open_receiveraddressoptions
     amqp: {},
   }
@@ -175,9 +186,9 @@ class ApplicationWorker {
     const message = createMessage(payload, params);
     const messageId = id2string(message.message_id);
 
-    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]`;
-    this._service.logger.debug(`${logPrefix}: message '${messageId}' is sending...`);
-    this._service.logger.trace(`${logPrefix}: message '${messageId}' payload:`, payload);
+    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]: message '${messageId}'`;
+    this._service.logger.debug(`${logPrefix} is sending...`);
+    this._service.logger.trace(`${logPrefix} payload:`, payload);
 
     let delivery;
     let sender;
@@ -207,15 +218,15 @@ class ApplicationWorker {
       }
 
       delivery = await sender.send(message, {
-        timeoutInSeconds: this._options.operationTimeoutInSeconds,
+        timeoutInSeconds: this._options.sender.timeoutInSeconds,
         ...options,
       });
     } catch (err) {
-      this._service.logger.error(`${logPrefix}: sending message '${messageId}' failed:`, err);
+      this._service.logger.error(`${logPrefix} sending failed:`, err);
       throw err;
     }
 
-    this._service.logger.debug(`${logPrefix}: message '${messageId}' sent.`);
+    this._service.logger.debug(`${logPrefix} sent.`);
 
     if (!this._options.sender.keepAlive) {
       sender.close({ closeSession: false }).catch(noop).then(() => { sender = null; });
@@ -305,10 +316,10 @@ class ApplicationWorker {
   async _openConnection() {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: connection is opening...`);
 
-    const connectionOpts = merge(pick(this._options, [
-      'url', 'clientKey', 'clientSecret', 'operationTimeoutInSeconds'
-    ]), {
+    const connectionOpts = merge(pick(this._options, ['url', 'clientKey', 'clientSecret']), {
       amqp: this._options.connection.amqp,
+      ...this._options.connection.operationTimeoutInSeconds
+        ? { operationTimeoutInSeconds: this._options.connection.operationTimeoutInSeconds } : {},
     });
 
     const connection = new Connection(connectionOpts);
@@ -438,54 +449,6 @@ class ApplicationWorker {
     this._abortController = null;
   }
 
-  async _createReceiver(channelName) {
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' is creating...`);
-
-    const { channels } = this._options;
-    const receiverOpts = merge({}, this._options.receiver, channels[channelName].options);
-    const receiverRheaOpts = merge({}, receiverOpts.amqp, {
-      session: this._session ? this._session : null,
-      abortSignal: this._abortController ? this._abortController.signal : null,
-      autoaccept: false,
-      // https://github.com/amqp/rhea-promise/blob/6ff5c9cf715c7e017ee76ceaefa172764cbec476/lib/session.ts#L264
-      onMessage: this._receiverHandler.bind(this, channelName),
-      onError: (ctx) => {
-        if (ctx.receiver) {
-          this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${ctx.receiver.name}) error`, ctx.receiver.error);
-        }
-      }
-    });
-
-    let receiver;
-    try {
-      receiver = await this._connection.createReceiver(channelName, receiverRheaOpts);
-    } catch (err) {
-      this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create receiver for '${channelName}'.`, err);
-      throw err;
-    }
-
-    receiver
-      .on(ReceiverEvents.receiverOpen, () => {
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) opened.`);
-      })
-      .on(ReceiverEvents.receiverDrained, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) drained.`);
-      })
-      .on(ReceiverEvents.receiverFlow, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) flow.`);
-      })
-      .on(ReceiverEvents.settled, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) settled.`);
-      })
-      .on(ReceiverEvents.receiverClose, () => {
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' (${receiver.name}) closed.`);
-      });
-
-    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' created: ${receiver.name}.`);
-
-    return receiver;
-  }
-
   async _createSender(channelName) {
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' is creating...`);
 
@@ -507,34 +470,34 @@ class ApplicationWorker {
     sender
       .on(SenderEvents.senderError, (ctx) => {
         const err = ctx.sender && ctx.sender.error;
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) error`, err);
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' error`, err);
       })
       .on(SenderEvents.senderOpen, () => {
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) opened.`);
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' opened.`);
       })
       .on(SenderEvents.senderDraining, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name})' draining.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' draining.`);
       })
       .on(SenderEvents.senderFlow, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) flow.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' flow.`);
       })
       .on(SenderEvents.sendable, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) sendable.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' sendable.`);
       })
       .on(SenderEvents.accepted, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) accepted.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' accepted.`);
       })
       .on(SenderEvents.modified, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) modified.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' modified.`);
       })
       .on(SenderEvents.rejected, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) rejected.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' rejected.`);
       })
       .on(SenderEvents.released, () => {
-        this._service.logger.trace(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) released.`);
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' released.`);
       })
       .on(SenderEvents.senderClose, () => {
-        this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' (${sender.name}) closed.`);
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: sender '${sender.name}' closed.`);
       });
 
     this._service.logger.debug(`1C:ESB [${this.applicationID}]: sender for '${channelName}' created: ${sender.name}.`);
@@ -542,28 +505,97 @@ class ApplicationWorker {
     return sender;
   }
 
-  async _receiverHandler(channelName, ctx) {
-    const { delivery, message: receivedMsg } = ctx;
+  async _createReceiver(channelName) {
+    let receiver;
 
-    const message = this._options.receiver.convertMessage
-      ? convertReceivedMessage(receivedMsg) : receivedMsg;
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' is creating...`);
 
+    const { channels } = this._options;
+    const receiverOpts = merge({}, this._options.receiver, channels[channelName].options);
+    const receiverRheaOpts = merge({}, receiverOpts.amqp, {
+      session: this._session ? this._session : null,
+      abortSignal: this._abortController ? this._abortController.signal : null,
+      autoaccept: false,
+      ...receiverOpts.parallel ? { credit_window: 0 } : {},
+
+      // https://github.com/amqp/rhea-promise/blob/6ff5c9cf715c7e017ee76ceaefa172764cbec476/lib/session.ts#L264
+      onMessage: (ctx) => {
+        const { message, delivery } = ctx;
+        this._receiverProcessMessage(channelName, message, delivery)
+          .catch((err) => this._service.logger.error(err))
+          .finally(() => {
+            if (receiverOpts.parallel) {
+              receiver.addCredit(1);
+            }
+          });
+      },
+
+      onError: (ctx) => {
+        if (ctx.receiver) {
+          this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${ctx.receiver.name}' error`, ctx.receiver.error);
+        }
+      },
+    });
+
+    try {
+      receiver = await this._connection.createReceiver(channelName, receiverRheaOpts);
+    } catch (err) {
+      this._service.logger.debug(`1C:ESB [${this.applicationID}]: failed to create receiver for '${channelName}'.`, err);
+      throw err;
+    }
+
+    receiver
+      .on(ReceiverEvents.receiverOpen, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${receiver.name}' opened.`);
+      })
+      .on(ReceiverEvents.receiverDrained, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${receiver.name}' drained.`);
+      })
+      .on(ReceiverEvents.receiverFlow, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${receiver.name}' flow.`);
+      })
+      .on(ReceiverEvents.settled, () => {
+        this._service.logger.trace(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${receiver.name}' settled.`);
+      })
+      .on(ReceiverEvents.receiverClose, () => {
+        this._service.logger.debug(`1C:ESB [${this.applicationID}]: [${channelName}]: receiver '${receiver.name}' closed.`);
+      });
+
+    this._service.logger.debug(`1C:ESB [${this.applicationID}]: receiver for '${channelName}' created: ${receiver.name}.`);
+
+    if (receiverOpts.parallel) {
+      if (receiverOpts.startDelay) {
+        receiver._startDelayTimer = setTimeout(() => {
+          receiver.addCredit(receiverOpts.parallel);
+          receiver._startDelayTimer = null;
+        }, receiverOpts.startDelay);
+      } else {
+        receiver.addCredit(receiverOpts.parallel);
+      }
+    }
+
+    return receiver;
+  }
+
+  async _receiverProcessMessage(channelName, message, delivery) {
     const messageId = id2string(message.message_id);
 
-    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]`;
-    this._service.logger.debug(`${logPrefix}: message '${messageId}' recieved.`);
+    const logPrefix = `1C:ESB [${this.applicationID}]: [${channelName}]: message '${messageId}'`;
+    this._service.logger.debug(`${logPrefix} recieved.`);
 
-    const { handler } = this._options.channels[channelName];
     try {
-      await handler.bind(this._service)(message, delivery);
+      const { convertMessage } = this._options.receiver;
+      const convertedMsg = convertMessage ? convertReceivedMessage(message) : message;
+      const { handler } = this._options.channels[channelName];
+      await handler.bind(this._service)(convertedMsg, delivery);
       if (!rheaMessage.is_accepted(delivery.state)
         && !rheaMessage.is_rejected(delivery.state)
         && !rheaMessage.is_released(delivery.state)) {
         delivery.accept();
       }
-      this._service.logger.debug(`${logPrefix}: message '${messageId}' processed.`);
+      this._service.logger.debug(`${logPrefix} processed.`);
     } catch (err) {
-      this._service.logger.error(`${logPrefix}: message '${messageId}' processing failed:`, err);
+      this._service.logger.error(`${logPrefix} processing failed:`, err);
       delivery.release({ delivery_failed: true });
     }
 
@@ -576,7 +608,7 @@ class ApplicationWorker {
       deliveryState = 'released';
     }
 
-    this._service.logger.debug(`${logPrefix}: message '${messageId}' delivery state: ${deliveryState}.`);
+    this._service.logger.trace(`${logPrefix} delivery state '${deliveryState}'.`);
   }
 
   async _stop() {
@@ -651,6 +683,11 @@ class ApplicationWorker {
     // First close receivers because they could use senders
     if (this._receivers.size > 0) {
       const receivers = Array.from(this._receivers.values());
+      receivers.filter((receiver) => receiver._startDelayTimer).forEach((receiver) => {
+        clearTimeout(receiver._startDelayTimer);
+        receiver._startDelayTimer = null;
+      });
+
       await asyncPool(concurrency, receivers, (receiver) => receiver.close({
         closeSession: !this._options.connection.singleSession,
       }));

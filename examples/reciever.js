@@ -10,13 +10,14 @@ const RecieverService = {
 
   settings: {
     esb: {
-      operationTimeoutInSeconds: 5,
       connection: {
+        operationTimeoutInSeconds: 5,
         amqp: { reconnect: { reconnect_limit: 5 } },
       },
       receiver: {
         convertMessage: true,
-        amqp: { credit_window: 10 },
+        parallel: 1,
+        amqp: {},
       },
     }
   },
