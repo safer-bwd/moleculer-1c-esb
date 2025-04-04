@@ -7,9 +7,9 @@ module.exports = {
       operationsConcurrency: 5,
 
       restart: {
-        startingDelay: 100,
+        initialDelay: 100,
         maxDelay: 60 * 1000,
-        timeMultiple: 2,
+        delayMultiplier: 2,
       },
 
       connection: {

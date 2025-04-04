@@ -90,9 +90,9 @@ const defaultOptions = {
   operationsConcurrency: 5,
 
   restart: {
-    startingDelay: 100,
+    initialDelay: 100,
     maxDelay: 60 * 1000,
-    timeMultiple: 2,
+    delayMultiplier: 2,
   },
 
   connection: {
@@ -291,15 +291,15 @@ class ApplicationWorker {
     this._state = States.Restarting;
 
     const {
-      startingDelay = 100,
+      initialDelay = 100,
       maxDelay = 60 * 1000,
-      timeMultiple = 2,
+      delayMultiplier = 2,
     } = this._options.restart;
 
     if (!this._restartDelay) {
-      this._restartDelay = startingDelay;
+      this._restartDelay = initialDelay;
     } else if (this._restartDelay < maxDelay) {
-      this._restartDelay *= timeMultiple;
+      this._restartDelay *= delayMultiplier;
       if (this._restartDelay > maxDelay) {
         this._restartDelay = maxDelay;
       }
